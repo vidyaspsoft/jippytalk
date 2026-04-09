@@ -1,0 +1,20 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme for dark/night mode -->
+    <style name="Base.Theme.Jippytalk" parent="Theme.Material3.DayNight.NoActionBar">
+    </style>
+
+    <!-- - Sender Message Theme (Night) - -->
+    <style name="senderMessageTheme">
+        <item name="android:background">@drawable/sent_message_background_night</item>
+    </style>
+
+    <!-- - Message Reply Styles (Night) - -->
+    <style name="msgToMsgReplyStyle">
+        <item name="cardBackgroundColor">#2F3A4D</item>
+    </style>
+
+    <style name="receiverSideMsgToMsgReplyBg">
+        <item name="cardBackgroundColor">#3A3A3A</item>
+    </style>
+
+</resources>

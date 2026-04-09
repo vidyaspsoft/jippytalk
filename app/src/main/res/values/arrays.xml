@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <array name="preloaded_fonts">
+        <item>@font/roboto</item>
+        <item>@font/helvetica</item>
+    </array>
+
+    <!-- Delete message options dialog -->
+    <string-array name="DeleteMessages">
+        <item>Delete for me</item>
+        <item>Delete for everyone</item>
+    </string-array>
+</resources>

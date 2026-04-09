@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:id="@+id/llSentMessage"
+    android:orientation="vertical"
+    android:layout_marginTop="1dp"
+    android:longClickable="true"
+    android:clickable="true"
+    android:focusable="true"
+    android:background="?android:attr/selectableItemBackground"
+    >
+
+    <androidx.cardview.widget.CardView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        app:cardCornerRadius="40dp"
+        app:cardMaxElevation="10dp"
+        style="@style/cardViewBackground"
+        android:id="@+id/cvDateDisplay"
+        android:visibility="gone"
+        tools:visibility="visible"
+        >
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            tools:text="Today"
+            android:fontFamily="@font/roboto"
+            android:id="@+id/tvDateDisplay"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:layout_marginStart="30dp"
+            android:layout_marginEnd="30dp"
+            android:layout_marginTop="5dp"
+            android:layout_marginBottom="5dp"
+            android:textAppearance="@style/TextAppearance.AppCompat.Small"
+            />
+
+    </androidx.cardview.widget.CardView>
+
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="end"
+        android:id="@+id/llMessageOverview"
+        >
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:id="@+id/llMessageBackgroundView"
+            android:layout_marginStart="50dp"
+            android:layout_marginEnd="10dp"
+            style="@style/senderMessageTheme"
+            android:minWidth="150dp"
+            >
+
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="10dp"
+                android:layout_margin="5dp"
+                app:cardElevation="0dp"
+                android:visibility="gone"
+                tools:visibility="visible"
+                style="@style/msgToMsgReplyStyle"
+                android:id="@+id/cvSentMsgToMsgReply"
+                >
+
+                <!--                #C9D2E6-->
+
+                <RelativeLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    >
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        tools:text="You"
+                        android:maxLines="1"
+                        android:textStyle="bold"
+                        android:id="@+id/tvMsgSenderName"
+                        style="@style/messagesTextStyle"
+                        android:layout_marginStart="10dp"
+                        android:layout_marginTop="5dp"
+                        />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/unknown_message"
+                        style="@style/messagesTextStyle"
+                        android:id="@+id/selectedMsgTxt"
+                        android:layout_below="@id/tvMsgSenderName"
+                        android:layout_marginStart="10dp"
+                        android:layout_marginTop="5dp"
+                        android:layout_marginBottom="5dp"
+                        android:maxLines="1"
+                        android:ellipsize="end"
+                        />
+
+                </RelativeLayout>
+
+            </androidx.cardview.widget.CardView>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:id="@+id/tvMessage"
+                tools:text="@string/wallpaper_preview_right_msg"
+                android:textAppearance="@style/TextAppearance.AppCompat.Subhead"
+                android:fontFamily="@font/roboto"
+                android:layout_marginTop="5dp"
+                android:layout_marginStart="10dp"
+                android:layout_marginEnd="10dp"
+                style="@style/messagesTextStyle"
+                android:linksClickable="true"
+                android:autoLink="all"
+                android:clickable="false"
+                android:focusable="false"
+                tools:ignore="RtlSymmetry"
+                />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end|center"
+                android:gravity="center"
+                android:orientation="horizontal"
+                android:layout_marginEnd="5dp"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="3dp"
+                android:id="@+id/llBelowIcons"
+                >
+
+                <ImageView
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:id="@+id/ivEditedImage"
+                    android:visibility="gone"
+                    tools:visibility="visible"
+                    android:layout_gravity="center"
+                    android:src="@drawable/message_edit"
+                    android:layout_marginEnd="5dp"
+                    android:contentDescription="@string/todo"
+                    />
+
+                <ImageView
+                    android:layout_width="@dimen/extra_small_text_size"
+                    android:layout_height="@dimen/extra_small_text_size"
+                    android:id="@+id/ivStarImage"
+                    android:visibility="gone"
+                    tools:visibility="visible"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_baseline_stars_24"
+                    android:layout_marginEnd="5dp"
+                    android:contentDescription="@string/todo"
+                    style="@style/messagesIconsStyle"
+                    />
+
+                <ImageView
+                    android:layout_width="@dimen/extra_small_text_size"
+                    android:layout_height="@dimen/extra_small_text_size"
+                    android:id="@+id/ivSeenImage"
+                    android:visibility="visible"
+                    android:src="@drawable/ic_baseline_visibility_off_24"
+                    android:layout_marginEnd="5dp"
+                    app:tint="?attr/colorControlNormal"
+                    android:contentDescription="@string/todo"
+                    style="@style/messagesIconsStyle"
+                    />
+
+                <TextView
+                    android:id="@+id/tvMessageTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    tools:text="02:30 AM"
+                    android:fontFamily="@font/roboto"
+                    android:layout_marginEnd="5dp"
+                    style="@style/messagesIconsStyle"
+                    android:textSize="@dimen/extra_small_text_size"
+                    />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+
+    </LinearLayout>
+
+</LinearLayout>

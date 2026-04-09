@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Custom attributes for message theme background colors -->
+<resources>
+    <attr name="sentMessageBackgroundColor_1" format="color" />
+    <attr name="sentMessageBackgroundColor_2" format="color" />
+    <attr name="sentMessageBackgroundColor_3" format="color" />
+</resources>

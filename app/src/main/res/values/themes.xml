@@ -1,0 +1,78 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme -->
+    <style name="Base.Theme.Jippytalk" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="sentMessageBackgroundColor_1">#B2DFDB</item>
+        <item name="sentMessageBackgroundColor_2">#F8BBD0</item>
+        <item name="sentMessageBackgroundColor_3">#B3E5FC</item>
+    </style>
+
+    <style name="Theme.Jippytalk" parent="Base.Theme.Jippytalk" />
+
+    <!-- - Activity Background Styles - -->
+    <style name="activity_bg3">
+        <item name="android:background">?android:attr/colorBackground</item>
+    </style>
+
+    <!-- - Messaging Activity Styles - -->
+    <style name="messagingActivityTheme">
+        <item name="android:background">@android:color/transparent</item>
+    </style>
+
+    <style name="menuStyle" parent="ThemeOverlay.AppCompat.DayNight" />
+
+    <!-- - CardView Styles - -->
+    <style name="cardViewBackground">
+        <item name="cardBackgroundColor">?android:attr/colorBackground</item>
+    </style>
+
+    <style name="cvMessageRequestTextBg">
+        <item name="cardBackgroundColor">?attr/colorPrimaryContainer</item>
+    </style>
+
+    <!-- - Message Box Styles - -->
+    <style name="send_message_box">
+        <item name="cardBackgroundColor">?android:attr/colorBackground</item>
+    </style>
+
+    <!-- - Sender Message Theme - -->
+    <style name="senderMessageTheme">
+        <item name="android:background">@drawable/sent_message_background</item>
+    </style>
+
+    <!-- - Message Text and Icon Styles - -->
+    <style name="messagesTextStyle">
+        <item name="android:textColor">?android:attr/textColorPrimary</item>
+    </style>
+
+    <style name="messagesIconsStyle">
+        <item name="android:tint">?android:attr/textColorSecondary</item>
+        <item name="android:textColor">?android:attr/textColorSecondary</item>
+    </style>
+
+    <style name="updatedTextColor">
+        <item name="android:textColor">?android:attr/textColorPrimary</item>
+    </style>
+
+    <style name="vectorIconsTint">
+        <item name="android:tint">?android:attr/textColorPrimary</item>
+    </style>
+
+    <!-- - Message Reply Styles - -->
+    <style name="msgToMsgReplyStyle">
+        <item name="cardBackgroundColor">#C9D2E6</item>
+    </style>
+
+    <style name="receiverSideMsgToMsgReplyBg">
+        <item name="cardBackgroundColor">#D5D5D5</item>
+    </style>
+
+    <!-- - Bottom Sheet Dialog Style - -->
+    <style name="TransparentDialog" parent="Theme.Design.Light.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/TransparentBottomSheet</item>
+    </style>
+
+    <style name="TransparentBottomSheet" parent="Widget.Design.BottomSheet.Modal">
+        <item name="android:background">@android:color/transparent</item>
+    </style>
+
+</resources>

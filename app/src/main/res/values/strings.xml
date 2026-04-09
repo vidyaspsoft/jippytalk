@@ -1,0 +1,31 @@
+<resources>
+    <string name="app_name">Jippytalk</string>
+
+    <!-- General placeholder -->
+    <string name="todo">TODO</string>
+
+    <!-- Messaging Activity strings -->
+    <string name="user_is_busy">User is busy right now</string>
+    <string name="accept">Accept</string>
+    <string name="decline">Decline</string>
+    <string name="make_first_move">Start a conversation</string>
+    <string name="make_the_first_move">Say Hello!</string>
+    <string name="unknown_message">This message is from an unknown contact</string>
+    <string name="send_message">Type a message</string>
+    <string name="messages_are_encrypted">Messages are end-to-end encrypted</string>
+
+    <!-- Wallpaper preview strings -->
+    <string name="wallpaper_preview_left_msg">Hey, how are you?</string>
+    <string name="wallpaper_preview_right_msg">I am doing great!</string>
+
+    <!-- Message status strings -->
+    <string name="message_deleted">This message was deleted</string>
+    <string name="this_message_has_been_deleted">This message has been deleted</string>
+    <string name="star_message">Star</string>
+    <string name="unstar_message">Unstar</string>
+
+    <!-- User status strings -->
+    <string name="user_busy_summary">You won\'t receive any messages while busy</string>
+    <string name="you">You</string>
+
+</resources>
