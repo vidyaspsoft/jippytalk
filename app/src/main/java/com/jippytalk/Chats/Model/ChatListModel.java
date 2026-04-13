@@ -19,13 +19,24 @@ public class ChatListModel {
     private final long          timestamp;
     private final String        profilePic;
     private final boolean       isSelected;
+    private final String        roomId;
 
-    // ---- Constructor ----
+    // ---- Constructor (without roomId — kept for backward compat) ----
 
     public ChatListModel(String contactId, String contactName, int messageDirection,
                          int messageType, String message, int messageStatus,
                          int unreadMessagesCount, long timestamp, String profilePic,
                          boolean isSelected) {
+        this(contactId, contactName, messageDirection, messageType, message, messageStatus,
+                unreadMessagesCount, timestamp, profilePic, isSelected, "");
+    }
+
+    // ---- Constructor (with roomId) ----
+
+    public ChatListModel(String contactId, String contactName, int messageDirection,
+                         int messageType, String message, int messageStatus,
+                         int unreadMessagesCount, long timestamp, String profilePic,
+                         boolean isSelected, String roomId) {
         this.contactId              =   contactId;
         this.contactName            =   contactName;
         this.messageDirection       =   messageDirection;
@@ -36,6 +47,7 @@ public class ChatListModel {
         this.timestamp              =   timestamp;
         this.profilePic             =   profilePic;
         this.isSelected             =   isSelected;
+        this.roomId                 =   roomId;
     }
 
     // ---- Getters ----
@@ -78,5 +90,9 @@ public class ChatListModel {
 
     public boolean isSelected() {
         return isSelected;
+    }
+
+    public String getRoomId() {
+        return roomId;
     }
 }

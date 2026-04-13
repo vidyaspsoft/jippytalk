@@ -16,6 +16,7 @@ import com.jippytalk.Database.ContactsDatabase.ContactsDatabase;
 import com.jippytalk.Database.ContactsDatabase.DAO.ContactsDatabaseDAO;
 import com.jippytalk.Extras;
 import com.jippytalk.Managers.AccountManager;
+import com.jippytalk.Managers.MessagesManager;
 import com.jippytalk.Managers.SharedPreferenceDetails;
 import com.jippytalk.Messages.Model.MessageModal;
 import com.jippytalk.R;
@@ -119,6 +120,63 @@ public class MessageUtils {
             Log.e(Extras.LOG_MESSAGE,"error in converting the time "+e.getMessage());
             return "date";
         }
+    }
+
+    /**
+     * Formats a duration in milliseconds to a human-readable string.
+     * Returns "M:SS" for durations under an hour, "H:MM:SS" for longer.
+     *
+     * @param durationMs the duration in milliseconds
+     * @return formatted string like "1:30" or "1:02:30"
+     */
+    public static String formatDuration(long durationMs) {
+        long    totalSeconds    =   durationMs / 1000;
+        long    hours           =   totalSeconds / 3600;
+        long    minutes         =   (totalSeconds % 3600) / 60;
+        long    seconds         =   totalSeconds % 60;
+
+        if (hours > 0) {
+            return String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds);
+        }
+        return String.format(Locale.getDefault(), "%d:%02d", minutes, seconds);
+    }
+
+    /**
+     * Returns a display label for the replied-to message based on its type.
+     * For text/link messages, returns the message text itself.
+     * For media messages, returns a type label like "Photo", "Video", etc.
+     *
+     * @param context       the context for string resources
+     * @param messageType   the message type constant from MessagesManager
+     * @param messageText   the original message text (used for text/link messages)
+     * @return the display label for the reply card
+     */
+    public static String getReplyLabel(Context context, int messageType, String messageText) {
+        switch (messageType) {
+            case MessagesManager.IMAGE_MESSAGE      ->  { return context.getString(R.string.reply_photo); }
+            case MessagesManager.VIDEO_MESSAGE      ->  { return context.getString(R.string.reply_video); }
+            case MessagesManager.AUDIO_MESSAGE      ->  { return context.getString(R.string.reply_audio); }
+            case MessagesManager.DOCUMENT_MESSAGE   ->  { return context.getString(R.string.reply_document); }
+            case MessagesManager.CONTACT_MESSAGE    ->  { return context.getString(R.string.reply_contact); }
+            case MessagesManager.LOCATION_MESSAGE   ->  { return context.getString(R.string.reply_location); }
+            default                                 ->  {
+                if (messageText == null || messageText.isEmpty()) {
+                    return context.getString(R.string.message_deleted);
+                }
+                return messageText;
+            }
+        }
+    }
+
+    /**
+     * Checks if the given message type is a media type that should show a thumbnail in reply cards.
+     *
+     * @param messageType the message type constant
+     * @return true if the message type has a visual thumbnail (image or video)
+     */
+    public static boolean isMediaTypeWithThumbnail(int messageType) {
+        return messageType == MessagesManager.IMAGE_MESSAGE
+                || messageType == MessagesManager.VIDEO_MESSAGE;
     }
 
     public Drawable getSentMsgBackground(Context context, int messageTheme, CardView cardView) {

@@ -67,7 +67,7 @@ public class NetworkChecker extends BroadcastReceiver {
             else {
                 Log.e(Extras.LOG_MESSAGE, "NetworkChecker - WebSocket not connected, reconnecting");
                 if (webSocketConnection != null) {
-                    webSocketConnection.connectToWebSocket();
+                    webSocketConnection.ensureConnected();
                 }
             }
         }

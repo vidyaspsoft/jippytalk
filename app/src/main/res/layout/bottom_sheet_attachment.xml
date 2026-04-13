@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bottom sheet layout for attachment options -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="?android:attr/colorBackground">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/choose_below"
+        android:textAlignment="center"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="20dp"
+        android:textColor="?android:attr/textColorPrimary" />
+
+    <!-- Row 1: Photo, Gallery, Video -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginBottom="16dp">
+
+        <!-- Photo -->
+        <LinearLayout
+            android:id="@+id/llAttachPhoto"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:padding="14dp"
+                android:background="@drawable/attachment_icon_bg"
+                android:src="@drawable/ic_photo_camera"
+                android:contentDescription="@string/attachment_photo" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/attachment_photo"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+        </LinearLayout>
+
+        <!-- Gallery -->
+        <LinearLayout
+            android:id="@+id/llAttachGallery"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:padding="14dp"
+                android:background="@drawable/attachment_icon_bg"
+                android:src="@drawable/ic_gallery"
+                android:contentDescription="@string/attachment_gallery" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/attachment_gallery"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+        </LinearLayout>
+
+        <!-- Video -->
+        <LinearLayout
+            android:id="@+id/llAttachVideo"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:padding="14dp"
+                android:background="@drawable/attachment_icon_bg"
+                android:src="@drawable/ic_videocam"
+                android:contentDescription="@string/attachment_video" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/attachment_video"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- Row 2: Video Gallery, Document, Location -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginBottom="16dp">
+
+        <!-- Video Gallery -->
+        <LinearLayout
+            android:id="@+id/llAttachVideoGallery"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:padding="14dp"
+                android:background="@drawable/attachment_icon_bg"
+                android:src="@drawable/ic_video_library"
+                android:contentDescription="@string/attachment_video_gallery" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/attachment_video_gallery"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+        </LinearLayout>
+
+        <!-- Document -->
+        <LinearLayout
+            android:id="@+id/llAttachDocument"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:padding="14dp"
+                android:background="@drawable/attachment_icon_bg"
+                android:src="@drawable/ic_document"
+                android:contentDescription="@string/attachment_document" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/attachment_document"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+        </LinearLayout>
+
+        <!-- Location -->
+        <LinearLayout
+            android:id="@+id/llAttachLocation"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:padding="14dp"
+                android:background="@drawable/attachment_icon_bg"
+                android:src="@drawable/ic_location"
+                android:contentDescription="@string/attachment_location" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/attachment_location"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- Row 3: Contact, Audio -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="start"
+        android:layout_marginBottom="16dp">
+
+        <!-- Contact -->
+        <LinearLayout
+            android:id="@+id/llAttachContact"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:padding="14dp"
+                android:background="@drawable/attachment_icon_bg"
+                android:src="@drawable/ic_contact"
+                android:contentDescription="@string/attachment_contact" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/attachment_contact"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+        </LinearLayout>
+
+        <!-- Audio -->
+        <LinearLayout
+            android:id="@+id/llAttachAudio"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+
+            <ImageView
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:padding="14dp"
+                android:background="@drawable/attachment_icon_bg"
+                android:src="@drawable/ic_audio"
+                android:contentDescription="@string/attachment_audio" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/attachment_audio"
+                android:layout_marginTop="8dp"
+                android:textSize="13sp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+        </LinearLayout>
+
+        <!-- Empty spacer for 3-column alignment -->
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+    </LinearLayout>
+
+</LinearLayout>

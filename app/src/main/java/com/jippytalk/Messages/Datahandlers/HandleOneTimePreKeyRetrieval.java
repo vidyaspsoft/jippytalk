@@ -20,14 +20,13 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
-import javax.net.ssl.HttpsURLConnection;
 
 public class HandleOneTimePreKeyRetrieval {
 
@@ -57,7 +56,7 @@ public class HandleOneTimePreKeyRetrieval {
                 jsonObject.put("contactId", contactId);
 
                 URL url     =   new URL(API.CONTACT_ONE_TIME_PRE_KEY);
-                HttpsURLConnection httpsURLConnection = (HttpsURLConnection) url.openConnection();
+                HttpURLConnection httpsURLConnection = (HttpURLConnection) url.openConnection();
                 httpsURLConnection.setRequestMethod("POST");
                 httpsURLConnection.setDoOutput(true);
                 httpsURLConnection.setRequestProperty("Content-Type", "application/json");

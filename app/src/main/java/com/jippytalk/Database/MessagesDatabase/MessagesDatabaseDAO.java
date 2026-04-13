@@ -30,6 +30,50 @@ public class MessagesDatabaseDAO {
 
     // Messages Table Functions Start ----------------
 
+    /**
+     * Reads the message body for a single row by message_id.
+     * @return the message column value, or null if not found
+     */
+    public String getMessageBodyById(String messageId) {
+        try {
+            SQLiteDatabase db = messagesDatabase.getReadableDb();
+            try (android.database.Cursor cursor = db.rawQuery(
+                    "SELECT " + MessagesDatabase.MESSAGE + " FROM " + MessagesDatabase.MESSAGES_TABLE
+                            + " WHERE " + MessagesDatabase.MESSAGE_ID + " = ?",
+                    new String[]{messageId})) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    return cursor.getString(0);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "getMessageBodyById failed: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Updates the `message` (body) column for a single row. Used to patch the
+     * attachment metadata JSON with local_file_path once a download completes.
+     *
+     * @return true if exactly one row was updated
+     */
+    public boolean updateMessageContent(String messageId, String newMessageBody) {
+        try {
+            SQLiteDatabase db = messagesDatabase.getWritableDb();
+            ContentValues cv = new ContentValues();
+            cv.put(MessagesDatabase.MESSAGE, newMessageBody);
+            int rows = db.update(
+                    MessagesDatabase.MESSAGES_TABLE,
+                    cv,
+                    MessagesDatabase.MESSAGE_ID + " = ?",
+                    new String[]{messageId});
+            return rows > 0;
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "updateMessageContent failed: " + e.getMessage());
+            return false;
+        }
+    }
+
     public boolean insertMessage(String messageId, int messageDirection, String receiverId,
                                  String message, int messageStatus, int needPush,
                                  long timestamp, long receiveTimestamp, long readTimestamp,
@@ -59,7 +103,11 @@ public class MessagesDatabaseDAO {
                 values.put(MessagesDatabase.IS_REPLY, isReply);
                 values.put(MessagesDatabase.REPLY_TO_MESSAGE_ID, replyToMessageId);
 
-                long result = sqLiteDatabase.insert(MessagesDatabase.MESSAGES_TABLE, null, values);
+                // Use CONFLICT_IGNORE so duplicate message_ids (e.g. server echoes our own
+                // sent messages back via fetchMessages) silently skip instead of throwing.
+                long result = sqLiteDatabase.insertWithOnConflict(
+                        MessagesDatabase.MESSAGES_TABLE, null, values,
+                        SQLiteDatabase.CONFLICT_IGNORE);
 
                 Log.e(Extras.LOG_MESSAGE, "values are " + values);
 

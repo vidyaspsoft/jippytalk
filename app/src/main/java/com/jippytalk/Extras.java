@@ -2,12 +2,16 @@ package com.jippytalk;
 
 public class Extras {
 
-    // Log tag
+    // Log tags
     public static final String LOG_MESSAGE                              = "JippyTalk";
     public static final String LOG_ERROR                                = "JippyTalkError";
+    public static final String LOG_SOCKET_SEND                          = "JippyTalkSocketSend";
+    public static final String LOG_SOCKET_RECV                          = "JippyTalkSocketRecv";
+    public static final String LOG_API                                  = "JippyTalkAPI";
 
     // Intent extras
     public static final String CHAT_ID                                  = "chatId";
+    public static final String CHAT_ROOM_ID                             = "chatRoomId";
     public static final String MESSAGE_ID                               = "messageId";
     public static final String CONTACT_ID                               = "contactId";
     public static final String CONTACT_NAME                             = "contactName";

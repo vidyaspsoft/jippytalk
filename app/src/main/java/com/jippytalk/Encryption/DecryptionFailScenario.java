@@ -25,7 +25,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 
-import javax.net.ssl.HttpsURLConnection;
+import java.net.HttpURLConnection;
 
 /**
  * DecryptionFailScenario - Handles the scenario when message decryption fails
@@ -82,7 +82,7 @@ public class DecryptionFailScenario {
                 jsonObject.put("contactId", contactId);
 
                 URL url =   new URL(API.CONTACT_ONE_TIME_PRE_KEY);
-                HttpsURLConnection httpsURLConnection   =   (HttpsURLConnection) url.openConnection();
+                HttpURLConnection httpsURLConnection   =   (HttpURLConnection) url.openConnection();
                 httpsURLConnection.setRequestMethod("POST");
                 httpsURLConnection.setDoOutput(true);
                 httpsURLConnection.setRequestProperty("Content-Type", "application/json");

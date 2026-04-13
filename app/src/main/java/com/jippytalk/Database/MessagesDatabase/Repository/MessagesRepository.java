@@ -278,6 +278,7 @@ public class MessagesRepository {
                                 repliedMessageDirection,
                                 contactName
                         );
+                        populateMediaFieldsFromJson(messageModal);
                         messages.add(messageModal);
                     }
                     while (cursor.moveToNext());
@@ -705,6 +706,11 @@ public class MessagesRepository {
     // --------------- Database Read Operations Ends Here ---------------------------
 
 
+    /**
+     * Reads the message body (message column) for a single row. Used to merge
+     * server-provided file metadata into the existing local JSON without losing
+     * fields like local_file_path.
+     */
     // --------------- Database Update Operations Starts here ------------------------------------
 
     public void updateMessageAsSyncedWithServer(String messageId, int messageStatus, int needPushStatus,
@@ -958,5 +964,49 @@ public class MessagesRepository {
 
     public interface ServiceCallBacks {
         void onChatListCheck(boolean isPresent);
+    }
+
+    /**
+     * For media messages (image/video/audio/document), the body stored in the
+     * `message` column is a JSON blob containing the attachment metadata (file_name,
+     * s3_key, content_type, etc.). This parses it and populates the MessageModal's
+     * media fields so the adapter's ViewHolders can render them.
+     *
+     * For plain text messages this is a no-op.
+     */
+    private void populateMediaFieldsFromJson(MessageModal model) {
+        int type = model.getMessageType();
+        if (type != MessagesManager.IMAGE_MESSAGE
+                && type != MessagesManager.VIDEO_MESSAGE
+                && type != MessagesManager.AUDIO_MESSAGE
+                && type != MessagesManager.DOCUMENT_MESSAGE) {
+            return;
+        }
+        String body = model.getMessage();
+        if (body == null || body.isEmpty() || body.charAt(0) != '{') {
+            return;
+        }
+        try {
+            org.json.JSONObject json = new org.json.JSONObject(body);
+            model.setFileName(json.optString("file_name", ""));
+            model.setCaption(json.optString("caption", ""));
+            model.setContentSubtype(json.optString("content_subtype", ""));
+            model.setMediaWidth(json.optInt("width", 0));
+            model.setMediaHeight(json.optInt("height", 0));
+            model.setMediaDuration(json.optLong("duration", 0));
+            model.setThumbnailUri(json.optString("thumbnail", ""));
+            model.setFileSize(json.optLong("file_size", 0));
+
+            // Prefer a local file path (sender's copy) if present; otherwise use s3_key
+            // as the remote identifier. The adapter can decide what to show.
+            String localPath = json.optString("local_file_path", "");
+            if (!localPath.isEmpty()) {
+                model.setMediaUri(localPath);
+            } else {
+                model.setMediaUri(json.optString("s3_key", ""));
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "Failed to parse media metadata for " + model.getMessageId() + ": " + e.getMessage());
+        }
     }
 }

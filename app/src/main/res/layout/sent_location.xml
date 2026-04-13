@@ -6,7 +6,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:layout_marginTop="1dp"
+    android:layout_marginTop="6dp"
     android:id="@+id/llSentLocationMessage"
     android:longClickable="true"
     android:clickable="true"
@@ -61,7 +61,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     tools:text="02:30 AM"
-                    android:fontFamily="@font/roboto"
+                    android:fontFamily="sans-serif"
                     android:layout_marginEnd="5dp"
                     style="@style/messagesIconsStyle"
                     android:textSize="@dimen/extra_small_text_size" />

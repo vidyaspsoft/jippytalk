@@ -18,7 +18,21 @@ public class MessageModal {
     private String  repliedToMessageText;
     private int     repliedToMessageDirection;
     private String  repliedToMessageSenderName;
+    private int     repliedToMessageType;
+    private String  repliedToMediaUri;
 
+    // ---- Media Attachment Fields ----
+
+    private String  mediaUri;
+    private String  thumbnailUri;
+    private String  contentSubtype;
+    private String  caption;
+    private int     mediaWidth;
+    private int     mediaHeight;
+    private long    mediaDuration;
+    private String  fileName;
+
+    // ---- Constructor (text messages) ----
 
     public MessageModal(String messageId, int messageDirection, String receiverId, String message,
                         int messageStatus, long timestamp, int starredStatus, int editedStatus,
@@ -38,6 +52,28 @@ public class MessageModal {
         this.repliedToMessageText           =   repliedToMessageText;
         this.repliedToMessageDirection      =   repliedToMessageDirection;
         this.repliedToMessageSenderName     =   repliedToMessageSenderName;
+    }
+
+    // ---- Constructor (media messages) ----
+
+    public MessageModal(String messageId, int messageDirection, String receiverId, String message,
+                        int messageStatus, long timestamp, int starredStatus, int editedStatus,
+                        int messageType, int isReply, String replyToMessageId, String repliedToMessageText,
+                        int repliedToMessageDirection, String repliedToMessageSenderName,
+                        String mediaUri, String thumbnailUri, String contentSubtype,
+                        String caption, int mediaWidth, int mediaHeight, long mediaDuration,
+                        String fileName) {
+        this(messageId, messageDirection, receiverId, message, messageStatus, timestamp,
+                starredStatus, editedStatus, messageType, isReply, replyToMessageId,
+                repliedToMessageText, repliedToMessageDirection, repliedToMessageSenderName);
+        this.mediaUri                       =   mediaUri;
+        this.thumbnailUri                   =   thumbnailUri;
+        this.contentSubtype                 =   contentSubtype;
+        this.caption                        =   caption;
+        this.mediaWidth                     =   mediaWidth;
+        this.mediaHeight                    =   mediaHeight;
+        this.mediaDuration                  =   mediaDuration;
+        this.fileName                       =   fileName;
     }
 
 
@@ -175,5 +211,99 @@ public class MessageModal {
 
     public void setRepliedToMessageSenderName(String repliedToMessageSenderName) {
         this.repliedToMessageSenderName = repliedToMessageSenderName;
+    }
+
+    public int getRepliedToMessageType() {
+        return repliedToMessageType;
+    }
+
+    public void setRepliedToMessageType(int repliedToMessageType) {
+        this.repliedToMessageType = repliedToMessageType;
+    }
+
+    public String getRepliedToMediaUri() {
+        return repliedToMediaUri;
+    }
+
+    public void setRepliedToMediaUri(String repliedToMediaUri) {
+        this.repliedToMediaUri = repliedToMediaUri;
+    }
+
+    // ---- Media Getters and Setters ----
+
+    public String getMediaUri() {
+        return mediaUri;
+    }
+
+    public void setMediaUri(String mediaUri) {
+        this.mediaUri = mediaUri;
+    }
+
+    public String getThumbnailUri() {
+        return thumbnailUri;
+    }
+
+    public void setThumbnailUri(String thumbnailUri) {
+        this.thumbnailUri = thumbnailUri;
+    }
+
+    public String getContentSubtype() {
+        return contentSubtype;
+    }
+
+    public void setContentSubtype(String contentSubtype) {
+        this.contentSubtype = contentSubtype;
+    }
+
+    public String getCaption() {
+        return caption;
+    }
+
+    public void setCaption(String caption) {
+        this.caption = caption;
+    }
+
+    public int getMediaWidth() {
+        return mediaWidth;
+    }
+
+    public void setMediaWidth(int mediaWidth) {
+        this.mediaWidth = mediaWidth;
+    }
+
+    public int getMediaHeight() {
+        return mediaHeight;
+    }
+
+    public void setMediaHeight(int mediaHeight) {
+        this.mediaHeight = mediaHeight;
+    }
+
+    public long getMediaDuration() {
+        return mediaDuration;
+    }
+
+    public void setMediaDuration(long mediaDuration) {
+        this.mediaDuration = mediaDuration;
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
+    }
+
+    // ---- File Size ----
+
+    private long    fileSize;
+
+    public long getFileSize() {
+        return fileSize;
+    }
+
+    public void setFileSize(long fileSize) {
+        this.fileSize = fileSize;
     }
 }

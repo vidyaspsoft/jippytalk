@@ -4,6 +4,46 @@
     <!-- General placeholder -->
     <string name="todo">TODO</string>
 
+    <!-- Login Activity strings -->
+    <string name="login_subtitle">Sign in to continue</string>
+    <string name="hint_username">Username</string>
+    <string name="hint_password">Password</string>
+    <string name="login">Login</string>
+    <string name="login_failed">Login failed. Please check your credentials.</string>
+    <string name="login_network_error">Network error. Please try again.</string>
+    <string name="username_required">Username is required</string>
+    <string name="password_required">Password is required</string>
+
+    <!-- Attachment Bottom Sheet strings -->
+    <string name="attachment">Attachment</string>
+    <string name="choose_below">Choose below</string>
+    <string name="attachment_photo">Photo</string>
+    <string name="attachment_gallery">Gallery</string>
+    <string name="attachment_video">Video</string>
+    <string name="attachment_video_gallery">Video Gallery</string>
+    <string name="attachment_document">Document</string>
+    <string name="attachment_location">Location</string>
+    <string name="attachment_contact">Contact</string>
+    <string name="attachment_audio">Audio</string>
+    <string name="permission_denied">Permission denied</string>
+    <string name="add_caption">Add a caption…</string>
+
+    <!-- Media Message strings -->
+    <string name="media_play">Play</string>
+    <string name="contact_shared">Contact shared</string>
+    <string name="reply_photo">Photo</string>
+    <string name="reply_video">Video</string>
+    <string name="reply_audio">Audio</string>
+    <string name="reply_document">Document</string>
+    <string name="reply_contact">Contact</string>
+    <string name="reply_location">Location</string>
+
+    <!-- Main Activity strings -->
+    <string name="no_chats_title">No chats yet</string>
+    <string name="no_chats_subtitle">Start a new conversation with a contact</string>
+    <string name="chats">Chats</string>
+    <string name="logged_in_as">Logged in as %1$s</string>
+
     <!-- Messaging Activity strings -->
     <string name="user_is_busy">User is busy right now</string>
     <string name="accept">Accept</string>

@@ -12,6 +12,7 @@ public class MessagesManager {
     public static final int     MESSAGE_DELIVERED_LOCALLY                   =   13;
     public static final int     DELETE_MESSAGE_FOR_EVERYONE                 =   4;
     public static final int     UNKNOWN_NUMBER_MESSAGE                      =   5;
+    public static final int     MESSAGE_SEND_FAILED                         =   6;
     public static final int     MESSAGE_RECEIVED_AND_NO_READ_RECEIPTS       =   7;
     public static final int     MESSAGE_SEEN_AND_NO_READ_RECEIPTS           =   8;
 
@@ -33,7 +34,12 @@ public class MessagesManager {
     public static final int     TEXT_MESSAGE                                =   0;
     public static final int     LINK_MESSAGE                                =   1;
     public static final int     LOCATION_MESSAGE                            =   2;
+    public static final int     IMAGE_MESSAGE                               =   3;
+    public static final int     VIDEO_MESSAGE                               =   4;
     public static final int     SYSTEM_MESSAGE_TYPE                         =   5;
+    public static final int     AUDIO_MESSAGE                               =   6;
+    public static final int     DOCUMENT_MESSAGE                            =   7;
+    public static final int     CONTACT_MESSAGE                             =   8;
 
     public static final int     MESSAGE_OUTGOING                            =   0;
     public static final int     MESSAGE_INCOMING                            =   1;
@@ -47,6 +53,14 @@ public class MessagesManager {
     public static final int     REPLIED_SENT_MESSAGE                        =   11;
     public static final int     REPLIED_RECEIVED_MESSAGE                    =   12;
     public static final int     SYSTEM_MESSAGE_VIEW                         =   5;
+
+    // Media View Types (for adapter)
+    public static final int     SENT_MEDIA                                  =   20;
+    public static final int     RECEIVED_MEDIA                              =   21;
+    public static final int     SENT_VIDEO                                  =   22;
+    public static final int     RECEIVED_VIDEO                              =   23;
+    public static final int     SENT_AUDIO                                  =   24;
+    public static final int     RECEIVED_AUDIO                              =   25;
 
 
     public static final int     DELETE_FOR_ME                               =   0;

@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single page in the attachment preview ViewPager2 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Image/video preview (full screen, fit center) -->
+    <ImageView
+        android:id="@+id/ivPreview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitCenter"
+        android:contentDescription="@string/todo" />
+
+    <!-- Play icon overlay for videos (centered over the video frame) -->
+    <ImageView
+        android:id="@+id/ivPlayOverlay"
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:layout_gravity="center"
+        android:src="@drawable/ic_play_circle"
+        android:visibility="gone"
+        android:contentDescription="@string/todo" />
+
+    <!-- Document card (centered, shown for PDFs/office docs that have no visual preview) -->
+    <LinearLayout
+        android:id="@+id/llDocPreview"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:visibility="gone"
+        tools:visibility="gone">
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="96dp"
+            android:layout_height="96dp"
+            app:cardCornerRadius="16dp"
+            app:cardBackgroundColor="#33FFFFFF"
+            app:cardElevation="0dp">
+
+            <ImageView
+                android:id="@+id/ivDocIcon"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_document"
+                app:tint="@android:color/white"
+                android:contentDescription="@string/todo" />
+        </androidx.cardview.widget.CardView>
+
+        <TextView
+            android:id="@+id/tvDocFileName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:maxWidth="280dp"
+            android:maxLines="2"
+            android:ellipsize="middle"
+            android:textColor="@android:color/white"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            tools:text="report.pdf" />
+
+        <TextView
+            android:id="@+id/tvDocFileSize"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="#99FFFFFF"
+            android:textSize="14sp"
+            tools:text="214 KB · PDF" />
+    </LinearLayout>
+
+    <!-- Audio card (centered, shown for audio files) -->
+    <LinearLayout
+        android:id="@+id/llAudioPreview"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:visibility="gone"
+        tools:visibility="gone">
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="96dp"
+            android:layout_height="96dp"
+            app:cardCornerRadius="48dp"
+            app:cardBackgroundColor="#33FFFFFF"
+            app:cardElevation="0dp">
+
+            <ImageView
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_audio"
+                app:tint="@android:color/white"
+                android:contentDescription="@string/todo" />
+        </androidx.cardview.widget.CardView>
+
+        <TextView
+            android:id="@+id/tvAudioFileName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:maxWidth="280dp"
+            android:maxLines="2"
+            android:ellipsize="middle"
+            android:textColor="@android:color/white"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            tools:text="recording.mp3" />
+
+        <TextView
+            android:id="@+id/tvAudioDuration"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="#99FFFFFF"
+            android:textSize="14sp"
+            tools:text="3:45 · MP3" />
+    </LinearLayout>
+
+</FrameLayout>

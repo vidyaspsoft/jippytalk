@@ -19,7 +19,7 @@ import java.net.URL;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import javax.net.ssl.HttpsURLConnection;
+import java.net.HttpURLConnection;
 
 public class TokenRefreshAPI {
 
@@ -33,11 +33,11 @@ public class TokenRefreshAPI {
 
     public void refreshUserJwtToken(JSONObject jsonObject, TokenRefreshCallBacks tokenRefreshCallBacks) {
         executorService.execute(() -> {
-            HttpsURLConnection httpsURLConnection = null;
+            HttpURLConnection httpsURLConnection = null;
             try {
 
                 URL url = new URL(API.JWT_TOKEN_REFRESH_URL);
-                httpsURLConnection = (HttpsURLConnection) url.openConnection();
+                httpsURLConnection = (HttpURLConnection) url.openConnection();
                 httpsURLConnection.setRequestMethod("POST");
                 httpsURLConnection.setDoOutput(true);
                 httpsURLConnection.setRequestProperty("Content-Type", "application/json");

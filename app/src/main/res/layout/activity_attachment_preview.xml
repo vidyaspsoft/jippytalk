@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WhatsApp-style attachment preview page: ViewPager2 + thumbnail strip + caption + send -->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF000000"
+    android:fitsSystemWindows="true"
+    tools:context=".Messages.Attachment.AttachmentPreviewActivity">
+
+    <!-- Top bar: back + file count + remove -->
+    <RelativeLayout
+        android:id="@+id/rlTopBar"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_alignParentTop="true"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
+
+        <ImageView
+            android:id="@+id/ivBack"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_centerVertical="true"
+            android:padding="6dp"
+            android:src="@drawable/ic_baseline_arrow_back_ios_new_24"
+            android:contentDescription="@string/todo"
+            app:tint="@android:color/white" />
+
+        <TextView
+            android:id="@+id/tvFileCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_centerVertical="true"
+            android:layout_toEndOf="@id/ivBack"
+            android:layout_marginStart="12dp"
+            android:textColor="@android:color/white"
+            android:textSize="16sp"
+            tools:text="1 of 3" />
+
+        <ImageView
+            android:id="@+id/ivRemoveFile"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_alignParentEnd="true"
+            android:layout_centerVertical="true"
+            android:padding="6dp"
+            android:src="@drawable/outline_clear_24"
+            android:contentDescription="@string/todo"
+            app:tint="@android:color/white" />
+    </RelativeLayout>
+
+    <!-- Center: ViewPager2 for full preview -->
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/vpPreview"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_below="@id/rlTopBar"
+        android:layout_above="@id/llBottomSection" />
+
+    <!-- Bottom section: thumbnail strip + caption + send -->
+    <LinearLayout
+        android:id="@+id/llBottomSection"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:orientation="vertical"
+        android:paddingBottom="12dp">
+
+        <!-- Thumbnail strip (visible only when multiple files selected) -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvThumbnailStrip"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_marginBottom="8dp"
+            android:clipToPadding="false"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:orientation="horizontal"
+            android:visibility="gone"
+            tools:visibility="visible" />
+
+        <!-- Caption + send row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp">
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                app:cardCornerRadius="24dp"
+                app:cardBackgroundColor="#33FFFFFF"
+                app:strokeWidth="0dp">
+
+                <EditText
+                    android:id="@+id/etCaption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/add_caption"
+                    android:textColorHint="#99FFFFFF"
+                    android:textColor="@android:color/white"
+                    android:inputType="textMultiLine"
+                    android:maxLines="3"
+                    android:padding="12dp"
+                    android:background="@android:color/transparent"
+                    android:autofillHints="" />
+
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/fabSend"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                app:srcCompat="@drawable/round_send_24"
+                app:fabSize="normal"
+                android:contentDescription="@string/todo" />
+
+        </LinearLayout>
+    </LinearLayout>
+
+</RelativeLayout>

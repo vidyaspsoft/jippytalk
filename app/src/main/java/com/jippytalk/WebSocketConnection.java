@@ -8,6 +8,7 @@ import android.util.Log;
 
 import com.jippytalk.ArchiveChat.Model.ArchiveListModel;
 import com.jippytalk.Database.MessagesDatabase.Repository.MessagesRepository;
+import com.jippytalk.Managers.MessagesManager;
 import com.jippytalk.Extras;
 import com.jippytalk.Managers.SharedPreferenceDetails;
 import com.jippytalk.MyApplication;
@@ -26,6 +27,7 @@ import com.jippytalk.ServiceLocators.RepositoryServiceLocator;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -54,6 +56,7 @@ public class WebSocketConnection {
     private ChatListCallBacks                       chatListCallBacks;
     private ArchiveChatListCallBacks                archiveChatListCallBacks;
     private UnknownChatListCallBacks                unknownChatListCallBacks;
+    private ConnectionStateListener                 connectionStateListener;
     private MessagesRepository                      messagesRepository;
     private HandleInsertionsFromService             handleInsertionsFromService;
     private HandleUpdatesFromService handleUpdatesFromService;
@@ -80,6 +83,29 @@ public class WebSocketConnection {
     private final ExecutorService                   unSyncDataExecutor                          =   Executors.newFixedThreadPool(2);
     private final Queue<String>                     incomingMessagesQueue                       =   new ConcurrentLinkedQueue<>();
     private final Queue<String>                     messageStatusQueue                          =   new ConcurrentLinkedQueue<>();
+
+    // Outbound sends that arrived while the socket was disconnected. Flushed on
+    // the next successful connection open. Used to ride through short reconnect
+    // windows — e.g. when a document picker interaction briefly pauses the
+    // activity and the socket closes + reopens in under a second.
+    private final Queue<Runnable>                   pendingOutboundSends                        =   new ConcurrentLinkedQueue<>();
+
+    /** Flushes any sends queued while the socket was offline. Called on connection open. */
+    private void flushPendingOutboundSends() {
+        Runnable task;
+        int count = 0;
+        while ((task = pendingOutboundSends.poll()) != null) {
+            try {
+                task.run();
+                count++;
+            } catch (Exception e) {
+                Log.e(Extras.LOG_SOCKET_SEND, "[PENDING] send task failed: " + e.getMessage());
+            }
+        }
+        if (count > 0) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[PENDING] flushed " + count + " queued sends");
+        }
+    }
 
 
     public WebSocketConnection(Context context, SharedPreferences sharedPreferences) {
@@ -147,6 +173,21 @@ public class WebSocketConnection {
         }
     }
 
+    /**
+     * Sets a one-shot or persistent connection state listener.
+     * Fired on successful connection, connection failure, and disconnection.
+     * Call with null to unregister.
+     *
+     * @param listener the listener to receive connection events
+     */
+    public void setConnectionStateListener(ConnectionStateListener listener) {
+        this.connectionStateListener            =   listener;
+        // If already connected, fire immediately so late subscribers get notified
+        if (listener != null && isConnectedToSocket) {
+            listener.onConnected();
+        }
+    }
+
     public void setMessagingActivityVisible(boolean isVisible) {
         this.isMessagingActivityVisible         =   isVisible;
 
@@ -211,6 +252,28 @@ public class WebSocketConnection {
         }
     }
 
+    /**
+     * Forces a reconnect even if max retries were exhausted. Called when there
+     * are pending outbound sends that need the socket. Resets the retry counter
+     * so connectToWebSocket() doesn't bail out.
+     */
+    public void ensureConnected() {
+        // Already open — nothing to do
+        if (webSocketClient != null && webSocketClient.isOpen()) return;
+
+        // Already connecting — don't start a second connection
+        if (isConnectingOrConnected) {
+            Log.e(Extras.LOG_MESSAGE, "ensureConnected: connection already in progress, skipping");
+            return;
+        }
+
+        // Reset retry counter so connectToWebSocket() doesn't bail
+        retryCount          =   0;
+        retryDelayMillis    =   2000;
+        Log.e(Extras.LOG_MESSAGE, "ensureConnected: resetting retries and reconnecting");
+        connectToWebSocket();
+    }
+
     public void connectToWebSocket() {
         if (retryCount >= MAX_RETRY_ATTEMPTS) {
             Log.e(Extras.LOG_MESSAGE, "Max retry attempts reached.");
@@ -222,8 +285,14 @@ public class WebSocketConnection {
             return;
         }
 
+        String  jwtToken    =   sharedPreferences.getString(SharedPreferenceDetails.JWT_TOKEN, "");
+        if (jwtToken.isEmpty()) {
+            Log.e(Extras.LOG_MESSAGE, "Cannot connect WebSocket: no JWT token available");
+            return;
+        }
+
         try {
-            URI uri = new URI("wss://JippyTalk.com/chatserver");
+            URI uri = new URI(API.WS_URL + "?token=" + jwtToken);
             isConnectingOrConnected = true;
             webSocketClient = new WebSocketClient(uri) {
                 @Override
@@ -237,26 +306,40 @@ public class WebSocketConnection {
                     retryCount = 0;
                     retryDelayMillis = 2000;
 
-                    if (userId != null && !userId.isEmpty()) {
-                        webSocketClient.send(userId);
-                    } else {
-                        userId = sharedPreferences.getString(SharedPreferenceDetails.USERID, "");
-                        if (!userId.isEmpty()) webSocketClient.send(userId);
-                    }
+                    // Auth is handled via token in the WebSocket URL query param
+                    userId  =   sharedPreferences.getString(SharedPreferenceDetails.USERID, "");
+
+                    // Flush any outbound sends that arrived while the socket was
+                    // disconnected (e.g. during a document picker pause/resume).
+                    flushPendingOutboundSends();
 
                     if (sendUnSyncedDataToServer != null) {
                         unSyncDataExecutor.execute(() -> {
-                            sendUnSyncedDataToServer.sendUnSyncedDeliveredMessagesToServer();
-                            sendUnSyncedDataToServer.sendUnSyncedSeenMessagesToServer();
-                            sendUnSyncedDataToServer.sendUnSyncedSentMessagesOrLinksToServer();
+                            try {
+                                sendUnSyncedDataToServer.sendUnSyncedDeliveredMessagesToServer();
+                                sendUnSyncedDataToServer.sendUnSyncedSeenMessagesToServer();
+                                sendUnSyncedDataToServer.sendUnSyncedSentMessagesOrLinksToServer();
+                            } catch (Exception e) {
+                                Log.e(Extras.LOG_MESSAGE, "Error sending unsynced data: " + e.getMessage());
+                            }
                         });
                         if (pendingContactId != null && pendingDeviceId != -1) {
-                            sendUnSyncedDataToServer.getUnSyncedMessagesOfContact(
-                                    pendingContactId, pendingDeviceId, webSocketClient
-                            );
+                            try {
+                                sendUnSyncedDataToServer.getUnSyncedMessagesOfContact(
+                                        pendingContactId, pendingDeviceId, webSocketClient
+                                );
+                            } catch (Exception e) {
+                                Log.e(Extras.LOG_MESSAGE, "Error sending unsynced contact messages: " + e.getMessage());
+                            }
                             pendingContactId = null;
                             pendingDeviceId = -1;
                         }
+                    }
+
+                    // Notify connection state listener on the main thread
+                    if (connectionStateListener != null) {
+                        final ConnectionStateListener listener = connectionStateListener;
+                        new Handler(Looper.getMainLooper()).post(listener::onConnected);
                     }
                 }
 
@@ -272,6 +355,11 @@ public class WebSocketConnection {
                     isConnectedToSocket = false;
                     webSocketClient = null;
 
+                    if (connectionStateListener != null) {
+                        final ConnectionStateListener listener = connectionStateListener;
+                        new Handler(Looper.getMainLooper()).post(listener::onDisconnected);
+                    }
+
                     if (!MyApplication.isAppClosed && retryCount < MAX_RETRY_ATTEMPTS) {
                         scheduleRetry();
                     } else {
@@ -282,9 +370,16 @@ public class WebSocketConnection {
                 @Override
                 public void onError(Exception ex) {
                     connectionTimeoutHandler.removeCallbacks(connectionTimeoutRunnable);
-                    Log.e(Extras.LOG_MESSAGE, "WebSocket error: " + (ex.getMessage() != null ? ex.getMessage() : "unknown"));
+                    final String errorMessage = ex.getMessage() != null ? ex.getMessage() : "unknown";
+                    Log.e(Extras.LOG_MESSAGE, "WebSocket error: " + errorMessage);
                     isConnectingOrConnected = false;
                     isConnectedToSocket = false;
+
+                    if (connectionStateListener != null) {
+                        final ConnectionStateListener listener = connectionStateListener;
+                        new Handler(Looper.getMainLooper()).post(() -> listener.onConnectionFailed(errorMessage));
+                    }
+
                     if (!MyApplication.isAppClosed && retryCount < MAX_RETRY_ATTEMPTS) {
                         scheduleRetry();
                     } else {
@@ -350,7 +445,7 @@ public class WebSocketConnection {
         apiServiceLocator               =   ((MyApplication) context.getApplicationContext()).getAPIServiceLocator();
         repositoryServiceLocator        =   ((MyApplication) context.getApplicationContext()).getRepositoryServiceLocator();
         appServiceLocator               =   ((MyApplication) context.getApplicationContext()).getAppServiceLocator();
-        repositoryServiceLocator        =   ((MyApplication) context.getApplicationContext()).getRepositoryServiceLocator();
+        messagesRepository              =   repositoryServiceLocator.getMessagesRepository();
         handleInsertionsFromService     =   new HandleInsertionsFromService(context.getApplicationContext(), webSocketClient,
                                             databaseServiceLocator, apiServiceLocator, repositoryServiceLocator, appServiceLocator);
         handleUpdatesFromService        =   new HandleUpdatesFromService(context.getApplicationContext(), webSocketClient);
@@ -382,9 +477,22 @@ public class WebSocketConnection {
 
     private void handleIncomingMessageFromWebSocket(String message) {
         websocketMessagesExecutor.execute(() -> {
+            // Log every incoming message
+            Log.e(Extras.LOG_SOCKET_RECV, "════════════════════ RECV ════════════════════");
+            Log.e(Extras.LOG_SOCKET_RECV, "Raw JSON : " + message);
+            Log.e(Extras.LOG_SOCKET_RECV, "═══════════════════════════════════════════════");
+
             try {
                 JSONObject jsonObject      =    new JSONObject(message);
-                String      action          =   jsonObject.getString("status");
+
+                // Check if this uses the new protocol envelope format {type, payload}
+                if (jsonObject.has("type")) {
+                    handleNewProtocolMessage(jsonObject);
+                    return;
+                }
+
+                // Legacy protocol handling (status/method)
+                String      action          =   jsonObject.optString("status", "");
                 Log.e(Extras.LOG_MESSAGE,"websocket status " + action);
 
                 switch (action) {
@@ -411,6 +519,400 @@ public class WebSocketConnection {
                 Log.e(Extras.LOG_MESSAGE,"Unable to receive any message from the websocket server "+e.getMessage());
             }
         });
+    }
+
+    /**
+     * Handles incoming WebSocket messages that use the new protocol envelope format:
+     *   { "type": "<event>", "payload": { ... } }
+     *
+     * Routes the message to the appropriate handler based on the event type.
+     */
+    private void handleNewProtocolMessage(JSONObject jsonObject) {
+        try {
+            String      type        =   jsonObject.getString("type");
+            JSONObject  payload     =   jsonObject.optJSONObject("payload");
+
+            Log.e(Extras.LOG_SOCKET_RECV, "Event type : " + type);
+            if (payload != null) {
+                Log.e(Extras.LOG_SOCKET_RECV, "Payload    : " + payload.toString());
+            }
+
+            switch (type) {
+                case "new_message" -> {
+                    // Incoming real-time message (text or file) sent to the receiver.
+                    // Contains full payload — insert into local DB and ack back to server.
+                    if (payload != null) {
+                        handleIncomingNewMessage(payload, true);
+                    }
+                }
+                case "ack_callback" -> {
+                    // Server's confirmation that our `ack` was processed. Contains the
+                    // full message data as a bonus. DO NOT send another ack — that would
+                    // create an infinite loop (server answers every ack with ack_callback).
+                    // Insert is still attempted in case new_message was missed; duplicates
+                    // are silently dropped by the DAO's CONFLICT_IGNORE.
+                    if (payload != null) {
+                        Log.e(Extras.LOG_SOCKET_RECV, "[ACK_CALLBACK] " + payload);
+                        handleIncomingNewMessage(payload, false);
+                    }
+                }
+                case "delivery_status" -> {
+                    if (payload != null) {
+                        handleDeliveryStatus(payload);
+                    }
+                }
+                case "message", "file" -> {
+                    // Legacy event names — kept for backwards compatibility while the
+                    // backend rolls out the new_message event. Same handling as new_message.
+                    if (payload != null) {
+                        handleIncomingNewMessage(payload, true);
+                    }
+                }
+                case "message_deleted" -> {
+                    if (payload != null) {
+                        String  msgId       =   payload.optString("message_id", "");
+                        String  roomId      =   payload.optString("room_id", "");
+                        Log.e(Extras.LOG_SOCKET_RECV, "[MESSAGE_DELETED] id=" + msgId + " room=" + roomId);
+                        // The server message_id is not the same as our local UUID — but if we
+                        // correlate by the pending queue (or in the future by client_message_id),
+                        // we can match. For now, try both the server id and our local ids.
+                        handleRemoteMessageDeletion(msgId);
+                    }
+                }
+                case "messages_read" -> {
+                    // Receiver read our messages → update each to SEEN (✓✓ blue)
+                    if (payload != null) {
+                        String      roomId          =   payload.optString("room_id", "");
+                        String      readerId        =   payload.optString("reader_id", "");
+                        JSONArray   clientMsgIds    =   payload.optJSONArray("client_message_ids");
+                        JSONArray   serverMsgIds    =   payload.optJSONArray("message_ids");
+                        // Prefer client_message_ids for local DB lookup
+                        JSONArray   idsToUse        =   clientMsgIds != null && clientMsgIds.length() > 0
+                                                        ? clientMsgIds : serverMsgIds;
+                        Log.e(Extras.LOG_SOCKET_RECV, "[MESSAGES_READ] room=" + roomId + " reader=" + readerId
+                                + " ids=" + (idsToUse != null ? idsToUse.toString() : "[]"));
+                        if (idsToUse != null) {
+                            for (int i = 0; i < idsToUse.length(); i++) {
+                                String readMsgId = idsToUse.optString(i, "");
+                                if (!readMsgId.isEmpty()) {
+                                    markMessageAsSeen(readMsgId);
+                                }
+                            }
+                        }
+                    }
+                }
+                case "file_deleted" -> {
+                    if (payload != null) {
+                        String  fileTransferId  =   payload.optString("file_transfer_id", "");
+                        String  status          =   payload.optString("status", "");
+                        Log.e(Extras.LOG_SOCKET_RECV, "[FILE_DELETED] id=" + fileTransferId + " status=" + status);
+                    }
+                }
+                case "typing" -> {
+                    if (payload != null) {
+                        String  typerId     =   payload.optString("typer_id", "");
+                        boolean isTyping    =   payload.optBoolean("typing_status", false);
+                        Log.e(Extras.LOG_SOCKET_RECV, "[TYPING] from=" + typerId + " typing=" + isTyping);
+                    }
+                }
+                case "presence_update", "user_online_status" -> {
+                    if (payload != null) {
+                        String  userId      =   payload.optString("user_id", "");
+                        int     online      =   payload.optInt("is_online", 0);
+                        Log.e(Extras.LOG_SOCKET_RECV, "[PRESENCE] user=" + userId + " online=" + online);
+                    }
+                }
+                case "error" -> {
+                    String  error       =   payload != null ? payload.optString("error", "") : "";
+                    Log.e(Extras.LOG_SOCKET_RECV, "[ERROR] " + error);
+                }
+                default -> Log.e(Extras.LOG_SOCKET_RECV, "[UNKNOWN] type=" + type);
+            }
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_RECV, "Failed to parse new protocol message: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Parses a new_message / ack_callback / legacy message payload and inserts the
+     * incoming message into the local DB. Handles both text and file messages:
+     *
+     *   Text payload: { id, room_id, sender_id, sender_username, receiver_id,
+     *                   receiver_username, ciphertext, message_type: "text", delivered, created_at }
+     *
+     *   File payload: Text fields + { file_transfer_id, encrypted_s3_url, s3_key,
+     *                   file_name, file_size, content_type, content_subtype, caption,
+     *                   width, height, duration, thumbnail }
+     *
+     * While Signal encryption is disabled, `ciphertext` is treated as plaintext.
+     * After insertion, optionally acks the message back to the server and notifies
+     * observers (the messaging activity re-queries the DB via its LiveData observer
+     * chain).
+     *
+     * @param payload   the WS payload JSON
+     * @param shouldAck true only for `new_message` / legacy `message`-`file` events.
+     *                  Must be false for `ack_callback` — acking the server's ack
+     *                  confirmation creates an infinite loop.
+     */
+    private void handleIncomingNewMessage(JSONObject payload, boolean shouldAck) {
+        try {
+            String  messageId       =   payload.optString("id", payload.optString("message_id", ""));
+            String  clientMsgId     =   payload.optString("client_message_id", "");
+            String  senderId        =   payload.optString("sender_id", "");
+            String  receiverId      =   payload.optString("receiver_id", "");
+            String  rawCiphertext   =   payload.optString("ciphertext", "");
+            String  encryptionKey   =   payload.optString("encryption_key", "");
+            String  encryptionIv    =   payload.optString("encryption_iv", "");
+            String  messageType     =   payload.optString("message_type", "text");
+            String  createdAt       =   payload.optString("created_at", "");
+            boolean delivered       =   payload.optBoolean("delivered", false);
+
+            // Decrypt ciphertext if encryption_key + iv are present
+            String  ciphertext;
+            if (!encryptionKey.isEmpty() && !encryptionIv.isEmpty()) {
+                String decrypted = com.jippytalk.Encryption.MessageCryptoHelper.decrypt(
+                        rawCiphertext, encryptionKey, encryptionIv);
+                ciphertext = decrypted != null ? decrypted : rawCiphertext;
+                Log.e(Extras.LOG_SOCKET_RECV, "[INCOMING] decrypted="
+                        + (decrypted != null ? "YES" : "FAILED (using raw)"));
+            } else {
+                // No encryption fields — plaintext (legacy or unencrypted message)
+                ciphertext = rawCiphertext;
+            }
+
+            // For file messages, the decrypted ciphertext IS the metadata JSON.
+            // Parse file fields from it if available; otherwise fall back to
+            // top-level payload fields (backward compat with unencrypted sends).
+            String  fileTransferId  =   payload.optString("file_transfer_id", "");
+            String  s3Key           =   payload.optString("s3_key", "");
+            String  fileName        =   payload.optString("file_name", "");
+            String  contentType     =   payload.optString("content_type", "");
+            String  contentSubtype  =   payload.optString("content_subtype", "");
+
+            if ("file".equals(messageType) && ciphertext.startsWith("{")) {
+                try {
+                    JSONObject decryptedMeta = new JSONObject(ciphertext);
+                    if (decryptedMeta.has("s3_key"))
+                        s3Key           =   decryptedMeta.optString("s3_key", s3Key);
+                    if (decryptedMeta.has("file_name"))
+                        fileName        =   decryptedMeta.optString("file_name", fileName);
+                    if (decryptedMeta.has("content_type"))
+                        contentType     =   decryptedMeta.optString("content_type", contentType);
+                    if (decryptedMeta.has("content_subtype"))
+                        contentSubtype  =   decryptedMeta.optString("content_subtype", contentSubtype);
+                    if (decryptedMeta.has("file_transfer_id"))
+                        fileTransferId  =   decryptedMeta.optString("file_transfer_id", fileTransferId);
+                } catch (JSONException ignored) {}
+            }
+
+            Log.e(Extras.LOG_SOCKET_RECV, "[INCOMING] from=" + senderId
+                    + " id=" + messageId + " clientId=" + clientMsgId
+                    + " type=" + messageType + " file=" + fileName);
+
+            if (messageId.isEmpty() || senderId.isEmpty()) {
+                Log.e(Extras.LOG_SOCKET_RECV, "[INCOMING] missing id/sender — dropping");
+                return;
+            }
+
+            // Don't insert messages we sent ourselves (prevents self-echo loops when
+            // server re-broadcasts). Our own sends are tracked via delivery_status.
+            if (senderId.equals(userId)) {
+                Log.e(Extras.LOG_SOCKET_RECV, "[INCOMING] skipping self-sent echo");
+                return;
+            }
+
+            // Decide local message type constant
+            int localMessageType    =   "file".equals(messageType)
+                                        ? MessagesManager.DOCUMENT_MESSAGE
+                                        : MessagesManager.TEXT_MESSAGE;
+
+            // Store either plaintext body or a stringified file metadata blob.
+            // For files we stuff everything into the message field for now so the
+            // adapter can show file_name / s3_key; a proper media-message row will
+            // replace this once the full file attachment schema is wired in.
+            final String bodyToStore;
+            if ("file".equals(messageType)) {
+                JSONObject metadata = new JSONObject();
+                metadata.put("file_transfer_id", fileTransferId);
+                metadata.put("s3_key", s3Key);
+                metadata.put("file_name", fileName);
+                metadata.put("content_type", contentType);
+                metadata.put("content_subtype", contentSubtype);
+                metadata.put("caption", payload.optString("caption", ""));
+                metadata.put("width", payload.optInt("width", 0));
+                metadata.put("height", payload.optInt("height", 0));
+                metadata.put("duration", payload.optLong("duration", 0));
+                metadata.put("thumbnail", payload.optString("thumbnail", ""));
+                metadata.put("encrypted_s3_url", payload.optString("encrypted_s3_url", ""));
+                metadata.put("file_size", payload.optLong("file_size", 0));
+                bodyToStore = metadata.toString();
+            } else {
+                bodyToStore = ciphertext;
+            }
+
+            if (messagesRepository == null) {
+                Log.e(Extras.LOG_SOCKET_RECV, "[INCOMING] messagesRepository null, queueing insert");
+                return;
+            }
+
+            long    now             =   System.currentTimeMillis();
+            int     messageStatus   =   delivered
+                                        ? MessagesManager.MESSAGE_DELIVERED
+                                        : MessagesManager.MESSAGE_DELIVERED_LOCALLY;
+
+            messagesRepository.insertMessageToLocalStorageFromService(
+                    messageId,
+                    MessagesManager.MESSAGE_INCOMING,
+                    senderId,                       // chat partner id = sender
+                    bodyToStore,
+                    messageStatus,
+                    MessagesManager.NO_NEED_TO_PUSH_MESSAGE,
+                    now,                            // sent ts
+                    now,                            // received ts
+                    MessagesManager.DEFAULT_READ_TIMESTAMP,
+                    MessagesManager.MESSAGE_NOT_STARRED,
+                    MessagesManager.MESSAGE_NOT_EDITED,
+                    localMessageType,
+                    0, 0,                           // lat, lng
+                    MessagesManager.DEFAULT_MSG_TO_MSG_REPLY,
+                    "",
+                    com.jippytalk.Managers.ChatManager.UNARCHIVE_CHAT,
+                    () -> {
+                        // Refresh the open chat, if it's this sender's chat
+                        if (openedChatId != null && openedChatId.equals(senderId)
+                                && messageCallBacks != null) {
+                            messagesRepository.getMessagesForContact(senderId);
+                        }
+                    });
+
+            // Ack back to server so delivery_status can flow back to the sender.
+            // Skipped when this is an ack_callback — see the shouldAck javadoc.
+            if (shouldAck) {
+                sendMessageAck(messageId);
+            }
+
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_RECV, "Failed to parse incoming message: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handles a delivery_status event. The backend now sends two forms:
+     *
+     *   1. Full payload (after sending): { id, room_id, sender_id, ..., delivered }
+     *      — use this to correlate our pending local UUID to the server id and
+     *      flip the local row's status to SYNCED/DELIVERED.
+     *
+     *   2. Slim payload (after receiver ack): { message_id, room_id, delivered }
+     *      — just a delivery acknowledgement; mark the sent row as delivered.
+     */
+    /**
+     * Handles delivery_status events. Two forms arrive from the server:
+     *
+     *   1. Full payload (delivered=false): server received the message but receiver
+     *      hasn't acked yet → mark as SYNCED (✓ single grey tick)
+     *   2. Slim payload (delivered=true): receiver's device got it and acked →
+     *      mark as DELIVERED (✓✓ double grey tick)
+     */
+    private void handleDeliveryStatus(JSONObject payload) {
+        String  serverMsgId     =   payload.optString("id", payload.optString("message_id", ""));
+        String  clientMsgId     =   payload.optString("client_message_id", "");
+        String  roomId          =   payload.optString("room_id", "");
+        boolean delivered       =   payload.optBoolean("delivered", false);
+        boolean isFullPayload   =   payload.has("sender_id") || payload.has("file_name");
+        String  messageType     =   payload.optString("message_type", "");
+
+        String  lookupId        =   !clientMsgId.isEmpty() ? clientMsgId : serverMsgId;
+
+        Log.e(Extras.LOG_SOCKET_RECV, "[DELIVERY] serverId=" + serverMsgId
+                + " clientId=" + clientMsgId + " room=" + roomId
+                + " delivered=" + delivered + " (" + (isFullPayload ? "full" : "slim") + ")");
+
+        if (lookupId.isEmpty()) {
+            Log.e(Extras.LOG_SOCKET_RECV, "[DELIVERY] no ID to correlate — dropping");
+            return;
+        }
+
+        if (!delivered) {
+            Log.e(Extras.LOG_SOCKET_RECV, "[DELIVERY] SYNCED (✓) id=" + lookupId);
+            markMessageAsSynced(lookupId);
+        } else {
+            Log.e(Extras.LOG_SOCKET_RECV, "[DELIVERY] DELIVERED (✓✓) id=" + lookupId);
+            markMessageAsDelivered(lookupId);
+        }
+    }
+
+    /**
+     * Handles an incoming message_deleted event by removing the message from the
+     * local DB and the in-memory adapter list. Called when either:
+     *   - The sender issued a delete_message event (server echoes back to both parties)
+     *   - Another device of the same user deleted a message
+     *
+     * @param messageId the ID of the message to remove
+     */
+    private void handleRemoteMessageDeletion(String messageId) {
+        if (messagesRepository != null) {
+            messagesRepository.deleteMessage(messageId);
+            Log.e(Extras.LOG_MESSAGE, "Local DB delete requested for: " + messageId);
+        }
+        // MessagingActivity observes getMessageDeleteLiveStatusFromViewModel() and will
+        // call retrieveAllMessagesOfContact() on success, which refreshes the adapter.
+    }
+
+    /**
+     * Updates a sent message's status to SYNCED (removes the clock icon in the UI).
+     * Updates both the local DB and the in-memory adapter list.
+     *
+     * @param localMessageId the local UUID of the sent message
+     */
+    /** Updates status to SYNCED (✓ single grey tick — server received it). */
+    private void markMessageAsSynced(String localMessageId) {
+        if (messagesRepository != null) {
+            messagesRepository.updateMessageAsSyncedWithServer(
+                    localMessageId,
+                    MessagesManager.MESSAGE_SYNCED_WITH_SERVER,
+                    MessagesManager.NO_NEED_TO_PUSH_MESSAGE,
+                    isSuccess -> Log.e(Extras.LOG_MESSAGE,
+                            "DB updated as SYNCED for " + localMessageId + " success=" + isSuccess)
+            );
+        }
+        if (messageCallBacks != null) {
+            messageCallBacks.updateMessageStatus(localMessageId,
+                    MessagesManager.MESSAGE_SYNCED_WITH_SERVER);
+        }
+    }
+
+    /** Updates status to DELIVERED (✓✓ double grey tick — receiver's device got it). */
+    private void markMessageAsDelivered(String messageId) {
+        if (messagesRepository != null) {
+            messagesRepository.updateMessageAsDelivered(
+                    messageId,
+                    MessagesManager.MESSAGE_DELIVERED,
+                    System.currentTimeMillis(),
+                    isSuccess -> Log.e(Extras.LOG_MESSAGE,
+                            "DB updated as DELIVERED for " + messageId + " success=" + isSuccess)
+            );
+        }
+        if (messageCallBacks != null) {
+            messageCallBacks.updateMessageStatus(messageId,
+                    MessagesManager.MESSAGE_DELIVERED);
+        }
+    }
+
+    /** Updates status to SEEN (✓✓ double blue tick — receiver read it). */
+    private void markMessageAsSeen(String messageId) {
+        if (messagesRepository != null) {
+            messagesRepository.updateMessageStatusAsSeen(
+                    messageId,
+                    MessagesManager.MESSAGE_SEEN,
+                    System.currentTimeMillis(),
+                    MessagesManager.NO_NEED_TO_PUSH_MESSAGE
+            );
+        }
+        if (messageCallBacks != null) {
+            messageCallBacks.updateMessageStatus(messageId,
+                    MessagesManager.MESSAGE_SEEN);
+        }
     }
 
     private void processMessageQueues() {
@@ -468,6 +970,399 @@ public class WebSocketConnection {
         }
         else {
             Log.e(Extras.LOG_MESSAGE,"No websocket client opened");
+        }
+    }
+
+    // -------------------- New Protocol Message Sending Starts Here ---------------------
+
+    /**
+     * Sends an E2E-encrypted text message using the new WebSocket protocol format:
+     *   { "type": "message", "payload": { receiver_id, ciphertext, message_type, signal_message_type } }
+     *
+     * The ciphertext is already Base64-encoded Signal Protocol output.
+     * The server generates the message_id and returns it via delivery_status.
+     *
+     * @param localMessageId        local UUID used only for logging/tracking
+     * @param receiverId            the receiver's user ID
+     * @param encryptedCiphertext   Base64-encoded Signal Protocol ciphertext
+     * @param signalMessageType     Signal message type (2=WHISPER, 3=PREKEY)
+     */
+    public void sendEncryptedTextMessage(String localMessageId, String receiverId,
+                                         String encryptedCiphertext, int signalMessageType) {
+        if (webSocketClient == null || !webSocketClient.isOpen()) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[FAIL] WebSocket not open, cannot send encrypted message: " + localMessageId);
+            return;
+        }
+
+        try {
+            JSONObject  payload     =   new JSONObject();
+            payload.put("client_message_id", localMessageId);
+            payload.put("receiver_id", receiverId);
+            payload.put("ciphertext", encryptedCiphertext);
+            payload.put("message_type", "text");
+            payload.put("signal_message_type", signalMessageType);
+
+            JSONObject  envelope    =   new JSONObject();
+            envelope.put("type", "message");
+            envelope.put("payload", payload);
+
+            String  jsonString      =   envelope.toString();
+
+            Log.e(Extras.LOG_SOCKET_SEND, "═════════════ SEND encrypted message ════════════");
+            Log.e(Extras.LOG_SOCKET_SEND, "ClientMsgId      : " + localMessageId);
+            Log.e(Extras.LOG_SOCKET_SEND, "ReceiverId       : " + receiverId);
+            Log.e(Extras.LOG_SOCKET_SEND, "SignalMsgType    : " + signalMessageType
+                    + " (" + (signalMessageType == 3 ? "PREKEY" : "WHISPER") + ")");
+            Log.e(Extras.LOG_SOCKET_SEND, "Raw JSON         : " + jsonString);
+            Log.e(Extras.LOG_SOCKET_SEND, "══════════════════════════════════════════════════");
+
+            webSocketClient.send(jsonString);
+
+            Log.e(Extras.LOG_SOCKET_SEND, "[OK] encrypted message sent: " + localMessageId);
+
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[ERROR] Failed to build encrypted message JSON: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Sends a text message using the new WebSocket protocol format:
+     *   { "type": "message", "payload": { receiver_id, ciphertext, message_type } }
+     *
+     * NOTE: The server generates the message_id and returns it via the delivery_status event.
+     * Sends unencrypted content in the ciphertext field for dev fallback only.
+     *
+     * @deprecated Use sendEncryptedTextMessage() once Signal Protocol session is established
+     *
+     * @param localMessageId    local UUID used only for logging/tracking (not sent to server)
+     * @param receiverId        the receiver's user ID
+     * @param text              the plain text message content
+     */
+    @Deprecated
+    public void sendPlainTextMessage(String localMessageId, String receiverId, String text) {
+        if (webSocketClient == null || !webSocketClient.isOpen()) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[PENDING] WebSocket not open, queueing text send: " + localMessageId);
+            pendingOutboundSends.offer(() -> sendPlainTextMessage(localMessageId, receiverId, text));
+            ensureConnected();
+            return;
+        }
+
+        try {
+            // AES-256-GCM encrypt the message text
+            com.jippytalk.Encryption.MessageCryptoHelper.EncryptionResult encrypted =
+                    com.jippytalk.Encryption.MessageCryptoHelper.encrypt(text);
+
+            JSONObject  payload     =   new JSONObject();
+            payload.put("client_message_id", localMessageId);
+            payload.put("receiver_id", receiverId);
+            payload.put("message_type", "text");
+
+            if (encrypted != null) {
+                payload.put("ciphertext", encrypted.ciphertext);
+                payload.put("encryption_key", encrypted.key);
+                payload.put("encryption_iv", encrypted.iv);
+            } else {
+                Log.e(Extras.LOG_SOCKET_SEND, "[WARN] Encryption failed, sending plaintext");
+                payload.put("ciphertext", text);
+            }
+
+            JSONObject  envelope    =   new JSONObject();
+            envelope.put("type", "message");
+            envelope.put("payload", payload);
+
+            String  jsonString      =   envelope.toString();
+
+            Log.e(Extras.LOG_SOCKET_SEND, "════════════════════ SEND message (encrypted) ════════");
+            Log.e(Extras.LOG_SOCKET_SEND, "ClientMsgId: " + localMessageId);
+            Log.e(Extras.LOG_SOCKET_SEND, "ReceiverId : " + receiverId);
+            Log.e(Extras.LOG_SOCKET_SEND, "Encrypted  : " + (encrypted != null ? "YES" : "NO (fallback)"));
+            Log.e(Extras.LOG_SOCKET_SEND, "Raw JSON   : " + jsonString);
+            Log.e(Extras.LOG_SOCKET_SEND, "═══════════════════════════════════════════════════════");
+
+            webSocketClient.send(jsonString);
+
+            Log.e(Extras.LOG_SOCKET_SEND, "[OK] encrypted message sent: " + localMessageId);
+
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[ERROR] Failed to build message JSON: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Sends an acknowledgement for a received message.
+     *   { "type": "ack", "payload": { message_id } }
+     *
+     * @param messageId the ID of the received message being acknowledged
+     */
+    public void sendMessageAck(String messageId) {
+        if (webSocketClient == null || !webSocketClient.isOpen()) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[FAIL] WebSocket not open, cannot send ack: " + messageId);
+            return;
+        }
+
+        try {
+            JSONObject  payload     =   new JSONObject();
+            payload.put("message_id", messageId);
+
+            JSONObject  envelope    =   new JSONObject();
+            envelope.put("type", "ack");
+            envelope.put("payload", payload);
+
+            String  jsonString      =   envelope.toString();
+
+            Log.e(Extras.LOG_SOCKET_SEND, "════════════════════ SEND ack ════════════════════════");
+            Log.e(Extras.LOG_SOCKET_SEND, "MessageId  : " + messageId);
+            Log.e(Extras.LOG_SOCKET_SEND, "Raw JSON   : " + jsonString);
+            Log.e(Extras.LOG_SOCKET_SEND, "═══════════════════════════════════════════════════════");
+
+            webSocketClient.send(jsonString);
+
+            Log.e(Extras.LOG_SOCKET_SEND, "[OK] ack sent: " + messageId);
+
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[ERROR] Failed to build ack JSON: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Sends a file message after the upload to S3 has completed.
+     *
+     *   {
+     *     "type": "file",
+     *     "payload": {
+     *       "receiver_id", "message_type": "file",
+     *       "s3_key", "encrypted_s3_url", "file_name",
+     *       "content_type", "content_subtype", "caption",
+     *       "width", "height", "duration", "thumbnail", "bucket",
+     *       "ciphertext"
+     *     }
+     *   }
+     *
+     * Note: file_size is intentionally omitted for now — backend will populate it
+     * on its side once the field is wired up. Once live, add it back here.
+     *
+     * The ciphertext field carries the Signal-encrypted metadata once E2E is turned
+     * back on. While encryption is disabled, it's sent empty.
+     */
+    public void sendFileMessage(String clientMessageId, String receiverId,
+                                String ciphertext, String encryptedS3Url,
+                                String s3Key, String fileName, long fileSize,
+                                String contentType, String contentSubtype, String caption,
+                                int width, int height, long duration,
+                                String thumbnail, String bucket) {
+        if (webSocketClient == null || !webSocketClient.isOpen()) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[PENDING] WebSocket not open, queueing file send for " + fileName);
+            pendingOutboundSends.offer(() -> sendFileMessage(
+                    clientMessageId, receiverId, ciphertext, encryptedS3Url, s3Key, fileName,
+                    fileSize, contentType, contentSubtype, caption,
+                    width, height, duration, thumbnail, bucket));
+            ensureConnected();
+            return;
+        }
+
+        try {
+            // Encrypt ONLY the caption text — file metadata fields (s3_key,
+            // Build full metadata JSON and ALWAYS encrypt it.
+            // The receiver decrypts using encryption_key + iv to get
+            // s3_key, file_name, thumbnail, caption, dimensions, etc.
+            JSONObject  metadata    =   new JSONObject();
+            metadata.put("s3_key", s3Key != null ? s3Key : "");
+            metadata.put("encrypted_s3_url", encryptedS3Url != null ? encryptedS3Url : "");
+            metadata.put("file_name", fileName != null ? fileName : "");
+            metadata.put("file_size", fileSize);
+            metadata.put("content_type", contentType != null ? contentType : "");
+            metadata.put("content_subtype", contentSubtype != null ? contentSubtype : "");
+            metadata.put("caption", caption != null ? caption : "");
+            metadata.put("width", width);
+            metadata.put("height", height);
+            metadata.put("duration", duration);
+            metadata.put("thumbnail", thumbnail != null ? thumbnail : "");
+            metadata.put("bucket", bucket != null ? bucket : "");
+
+            com.jippytalk.Encryption.MessageCryptoHelper.EncryptionResult encrypted =
+                    com.jippytalk.Encryption.MessageCryptoHelper.encrypt(metadata.toString());
+
+            JSONObject  payload     =   new JSONObject();
+            payload.put("client_message_id", clientMessageId != null ? clientMessageId : "");
+            payload.put("receiver_id", receiverId);
+            payload.put("message_type", "file");
+
+            if (encrypted != null) {
+                payload.put("ciphertext", encrypted.ciphertext);
+                payload.put("encryption_key", encrypted.key);
+                payload.put("encryption_iv", encrypted.iv);
+            } else {
+                payload.put("ciphertext", metadata.toString());
+                payload.put("encryption_key", "");
+                payload.put("encryption_iv", "");
+            }
+
+            // Top-level file fields (backend needs for routing/indexing)
+            payload.put("s3_key", s3Key != null ? s3Key : "");
+            payload.put("encrypted_s3_url", encryptedS3Url != null ? encryptedS3Url : "");
+            payload.put("file_name", fileName != null ? fileName : "");
+            payload.put("file_size", fileSize);
+            payload.put("content_type", contentType != null ? contentType : "");
+            payload.put("content_subtype", contentSubtype != null ? contentSubtype : "");
+            payload.put("caption", caption != null ? caption : "");
+            payload.put("width", width);
+            payload.put("height", height);
+            payload.put("duration", duration);
+            payload.put("thumbnail", thumbnail != null ? thumbnail : "");
+            payload.put("bucket", bucket != null ? bucket : "");
+
+            JSONObject  envelope    =   new JSONObject();
+            envelope.put("type", "file");
+            envelope.put("payload", payload);
+
+            String  jsonString      =   envelope.toString();
+
+            Log.e(Extras.LOG_SOCKET_SEND, "════════════════════ SEND file (encrypted) ═══════════");
+            Log.e(Extras.LOG_SOCKET_SEND, "ClientMsgId : " + clientMessageId);
+            Log.e(Extras.LOG_SOCKET_SEND, "ReceiverId  : " + receiverId);
+            Log.e(Extras.LOG_SOCKET_SEND, "FileName    : " + fileName);
+            Log.e(Extras.LOG_SOCKET_SEND, "FileSize    : " + fileSize);
+            Log.e(Extras.LOG_SOCKET_SEND, "ContentType : " + contentType + "/" + contentSubtype);
+            Log.e(Extras.LOG_SOCKET_SEND, "S3Key       : " + s3Key);
+            Log.e(Extras.LOG_SOCKET_SEND, "Thumbnail   : " + (thumbnail != null && !thumbnail.isEmpty() ? "YES" : "NONE"));
+            Log.e(Extras.LOG_SOCKET_SEND, "Dimensions  : " + width + "x" + height);
+            Log.e(Extras.LOG_SOCKET_SEND, "Duration    : " + duration);
+            Log.e(Extras.LOG_SOCKET_SEND, "Encrypted   : " + (encrypted != null ? "YES" : "NO"));
+            Log.e(Extras.LOG_SOCKET_SEND, "Raw JSON    : " + jsonString);
+            Log.e(Extras.LOG_SOCKET_SEND, "═══════════════════════════════════════════════════════");
+
+            webSocketClient.send(jsonString);
+
+            Log.e(Extras.LOG_SOCKET_SEND, "[OK] file message sent: " + fileName);
+
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[ERROR] Failed to build file message JSON: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Notifies the server that a received file has been downloaded.
+     *   { "type": "file_downloaded", "payload": { file_transfer_id } }
+     *
+     * Triggers the server to delete the file from S3.
+     *
+     * @param fileTransferId the server's file transfer ID for the downloaded file
+     */
+    public void sendFileDownloaded(String fileTransferId) {
+        if (webSocketClient == null || !webSocketClient.isOpen()) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[FAIL] WebSocket not open, cannot send file_downloaded");
+            return;
+        }
+
+        try {
+            JSONObject  payload     =   new JSONObject();
+            payload.put("file_transfer_id", fileTransferId);
+
+            JSONObject  envelope    =   new JSONObject();
+            envelope.put("type", "file_downloaded");
+            envelope.put("payload", payload);
+
+            String  jsonString      =   envelope.toString();
+
+            Log.e(Extras.LOG_SOCKET_SEND, "══════════════════ SEND file_downloaded ══════════════");
+            Log.e(Extras.LOG_SOCKET_SEND, "FileTransferId : " + fileTransferId);
+            Log.e(Extras.LOG_SOCKET_SEND, "Raw JSON       : " + jsonString);
+            Log.e(Extras.LOG_SOCKET_SEND, "═══════════════════════════════════════════════════════");
+
+            webSocketClient.send(jsonString);
+
+            Log.e(Extras.LOG_SOCKET_SEND, "[OK] file_downloaded sent: " + fileTransferId);
+
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[ERROR] Failed to build file_downloaded JSON: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Sends a delete_message event to hard-delete a message (E2E safe).
+     *   { "type": "delete_message", "payload": { message_id } }
+     *
+     * Only the sender can delete their own messages. The server removes the message
+     * and any associated file transfer from the database and notifies both parties.
+     *
+     * @param messageId the server-assigned ID of the message to delete
+     */
+    public void sendDeleteMessage(String messageId) {
+        if (webSocketClient == null || !webSocketClient.isOpen()) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[FAIL] WebSocket not open, cannot send delete_message");
+            return;
+        }
+
+        try {
+            JSONObject  payload     =   new JSONObject();
+            payload.put("message_id", messageId);
+
+            JSONObject  envelope    =   new JSONObject();
+            envelope.put("type", "delete_message");
+            envelope.put("payload", payload);
+
+            String  jsonString      =   envelope.toString();
+
+            Log.e(Extras.LOG_SOCKET_SEND, "════════════════════ SEND delete_message ═════════════");
+            Log.e(Extras.LOG_SOCKET_SEND, "MessageId  : " + messageId);
+            Log.e(Extras.LOG_SOCKET_SEND, "Raw JSON   : " + jsonString);
+            Log.e(Extras.LOG_SOCKET_SEND, "═══════════════════════════════════════════════════════");
+
+            webSocketClient.send(jsonString);
+
+            Log.e(Extras.LOG_SOCKET_SEND, "[OK] delete_message sent: " + messageId);
+
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[ERROR] Failed to build delete_message JSON: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Marks messages as read. Pass a list of message IDs OR leave it empty/null to mark
+     * ALL unread messages in the given room as read.
+     *   { "type": "mark_read", "payload": { message_ids: [...], room_id } }
+     *
+     * The server notifies the original sender(s) via the messages_read event so they can
+     * update read receipts (blue ticks).
+     *
+     * @param roomId        the room ID containing the messages
+     * @param messageIds    specific message IDs to mark read, or null/empty for all unread in room
+     */
+    public void sendMarkRead(String roomId, java.util.List<String> messageIds) {
+        if (webSocketClient == null || !webSocketClient.isOpen()) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[FAIL] WebSocket not open, cannot send mark_read");
+            return;
+        }
+
+        try {
+            JSONObject      payload     =   new JSONObject();
+            JSONArray       idsArray    =   new JSONArray();
+            if (messageIds != null) {
+                for (String id : messageIds) {
+                    idsArray.put(id);
+                }
+            }
+            payload.put("message_ids", idsArray);
+            payload.put("room_id", roomId);
+
+            JSONObject  envelope    =   new JSONObject();
+            envelope.put("type", "mark_read");
+            envelope.put("payload", payload);
+
+            String  jsonString      =   envelope.toString();
+
+            Log.e(Extras.LOG_SOCKET_SEND, "════════════════════ SEND mark_read ══════════════════");
+            Log.e(Extras.LOG_SOCKET_SEND, "RoomId     : " + roomId);
+            Log.e(Extras.LOG_SOCKET_SEND, "MessageIds : " + idsArray);
+            Log.e(Extras.LOG_SOCKET_SEND, "Raw JSON   : " + jsonString);
+            Log.e(Extras.LOG_SOCKET_SEND, "═══════════════════════════════════════════════════════");
+
+            webSocketClient.send(jsonString);
+
+            Log.e(Extras.LOG_SOCKET_SEND, "[OK] mark_read sent for room: " + roomId);
+
+        } catch (JSONException e) {
+            Log.e(Extras.LOG_SOCKET_SEND, "[ERROR] Failed to build mark_read JSON: " + e.getMessage());
         }
     }
 
@@ -649,5 +1544,28 @@ public class WebSocketConnection {
 
     public interface UnknownChatListCallBacks {
         void insertUnknownContactChat(ArchiveListModel archiveListModel);
+    }
+
+    /**
+     * Listener for WebSocket connection state changes.
+     * All methods are called on the main thread.
+     */
+    public interface ConnectionStateListener {
+        /**
+         * Called when the WebSocket has successfully connected and completed handshake.
+         */
+        void onConnected();
+
+        /**
+         * Called when the WebSocket connection has been closed.
+         */
+        void onDisconnected();
+
+        /**
+         * Called when the WebSocket connection has failed.
+         *
+         * @param error the error message describing the failure
+         */
+        void onConnectionFailed(String error);
     }
 }

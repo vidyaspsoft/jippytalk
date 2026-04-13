@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Received video message: shows thumbnail + play icon + duration -->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:id="@+id/llReceivedVideoMessage"
+    android:orientation="vertical"
+    android:layout_marginTop="6dp"
+    android:longClickable="true"
+    android:clickable="true"
+    android:focusable="true"
+    android:background="?android:attr/selectableItemBackground">
+
+    <androidx.cardview.widget.CardView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        app:cardCornerRadius="40dp"
+        style="@style/cardViewBackground"
+        android:id="@+id/cvDateDisplay"
+        android:visibility="gone">
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif"
+            android:id="@+id/tvDateDisplay"
+            android:gravity="center"
+            android:textAlignment="center"
+            android:layout_marginStart="30dp"
+            android:layout_marginEnd="30dp"
+            android:layout_marginTop="5dp"
+            android:layout_marginBottom="5dp"
+            android:textAppearance="@style/TextAppearance.AppCompat.Small" />
+    </androidx.cardview.widget.CardView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="start"
+        android:id="@+id/llMessageOverview">
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:cardCornerRadius="12dp"
+            android:layout_marginStart="10dp"
+            android:layout_marginEnd="80dp"
+            android:id="@+id/cvVideoContainer"
+            app:cardUseCompatPadding="true">
+
+            <LinearLayout
+                android:layout_width="250dp"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/received_message_background">
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="200dp">
+
+                    <ImageView
+                        android:id="@+id/ivVideoThumbnail"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:scaleType="centerCrop"
+                        android:contentDescription="@string/attachment_video" />
+
+                    <ImageView
+                        android:id="@+id/ivPlayIcon"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:layout_gravity="center"
+                        android:src="@drawable/ic_play_circle"
+                        android:contentDescription="@string/media_play" />
+
+                    <TextView
+                        android:id="@+id/tvDuration"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="bottom|start"
+                        android:layout_margin="6dp"
+                        android:background="#80000000"
+                        android:paddingStart="6dp"
+                        android:paddingEnd="6dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="2dp"
+                        android:textColor="@color/white"
+                        android:textSize="11sp"
+                        tools:text="0:30" />
+
+                    <!-- Download button overlay -->
+                    <FrameLayout
+                        android:id="@+id/flDownloadOverlay"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:background="#80000000"
+                        android:visibility="gone">
+
+                        <ImageView
+                            android:id="@+id/ivDownload"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:layout_gravity="center"
+                            android:src="@drawable/ic_download"
+                            android:contentDescription="@string/todo" />
+                    </FrameLayout>
+
+                    <!-- Download progress overlay -->
+                    <FrameLayout
+                        android:id="@+id/flDownloadProgressOverlay"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:background="#80000000"
+                        android:visibility="gone">
+
+                        <ProgressBar
+                            android:id="@+id/progressBarDownload"
+                            style="?android:attr/progressBarStyleHorizontal"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="center"
+                            android:layout_marginStart="24dp"
+                            android:layout_marginEnd="24dp"
+                            android:max="100"
+                            android:progress="0" />
+                    </FrameLayout>
+
+                    <!-- Retry overlay -->
+                    <FrameLayout
+                        android:id="@+id/flRetryOverlay"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:background="#80000000"
+                        android:visibility="gone">
+
+                        <ImageView
+                            android:id="@+id/ivRetryDownload"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:layout_gravity="center"
+                            android:src="@drawable/ic_retry"
+                            android:contentDescription="@string/todo" />
+                    </FrameLayout>
+                </FrameLayout>
+
+                <TextView
+                    android:id="@+id/tvCaption"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone"
+                    android:layout_marginStart="10dp"
+                    android:layout_marginEnd="10dp"
+                    android:layout_marginTop="5dp"
+                    android:fontFamily="sans-serif"
+                    style="@style/messagesTextStyle" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="end|center"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:layout_marginEnd="5dp"
+                    android:layout_marginTop="2dp"
+                    android:layout_marginBottom="3dp">
+
+                    <ImageView
+                        android:layout_width="@dimen/extra_small_text_size"
+                        android:layout_height="@dimen/extra_small_text_size"
+                        android:id="@+id/ivStarImage"
+                        android:visibility="gone"
+                        android:src="@drawable/ic_baseline_stars_24"
+                        android:layout_marginEnd="5dp"
+                        android:contentDescription="@string/todo"
+                        style="@style/messagesIconsStyle" />
+
+                    <TextView
+                        android:id="@+id/tvMessageTime"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        tools:text="02:30 AM"
+                        android:fontFamily="sans-serif"
+                        android:layout_marginEnd="5dp"
+                        style="@style/messagesIconsStyle"
+                        android:textSize="@dimen/extra_small_text_size" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+    </LinearLayout>
+</LinearLayout>

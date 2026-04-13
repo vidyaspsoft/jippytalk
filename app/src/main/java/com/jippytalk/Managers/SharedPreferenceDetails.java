@@ -12,6 +12,7 @@ public class SharedPreferenceDetails {
     public static final String  USER_LOGIN                                  =   "isLogged";
     public static final String  ACCOUNT_SETUP                               =   "accountSetup";
     public static final String  REGISTRATION_PROGRESS                       =   "registrationProgress";
+    public static final String  SIGNAL_KEYS_GENERATED                       =   "signalKeysGenerated";
     public static final String  SIGNAL_KEYS_UPLOAD                          =   "signalKeysUpload";
     public static final String  ONE_TIME_PRE_KEYS_UPLOAD                    =   "oneTimePreKeysUpload";
     public static final String  KYBER_PRE_KEYS_UPLOAD                       =   "kyberPreKeysUpload";

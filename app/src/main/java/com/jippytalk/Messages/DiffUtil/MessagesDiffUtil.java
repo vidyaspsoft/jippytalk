@@ -25,6 +25,9 @@ public class MessagesDiffUtil extends DiffUtil.ItemCallback<MessageModal> {
                 && oldItem.getEditedStatus() == newItem.getEditedStatus()
                 && oldItem.getMessageType() == newItem.getMessageType()
                 && oldItem.isReply() == newItem.isReply()
-                && TextUtils.equals(oldItem.getReplyToMessageId(), newItem.getReplyToMessageId());
+                && TextUtils.equals(oldItem.getReplyToMessageId(), newItem.getReplyToMessageId())
+                && TextUtils.equals(oldItem.getMediaUri(), newItem.getMediaUri())
+                && oldItem.getMediaDuration() == newItem.getMediaDuration()
+                && TextUtils.equals(oldItem.getFileName(), newItem.getFileName());
     }
 }

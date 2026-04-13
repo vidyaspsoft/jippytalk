@@ -6,7 +6,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:layout_marginTop="1dp"
+    android:layout_marginTop="6dp"
     android:id="@+id/llReceivedLocationMessage"
     android:longClickable="true"
     android:clickable="true"
@@ -49,7 +49,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     tools:text="02:30 AM"
-                    android:fontFamily="@font/roboto"
+                    android:fontFamily="sans-serif"
                     style="@style/messagesIconsStyle"
                     android:layout_marginEnd="10dp"
                     android:textSize="@dimen/extra_small_text_size" />

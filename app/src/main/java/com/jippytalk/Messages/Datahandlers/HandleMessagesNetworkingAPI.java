@@ -22,11 +22,10 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.net.HttpURLConnection;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
-import javax.net.ssl.HttpsURLConnection;
 
 public class HandleMessagesNetworkingAPI {
 
@@ -54,7 +53,7 @@ public class HandleMessagesNetworkingAPI {
 
                 String data  = URLEncoder.encode("user_id", "UTF-8") + "=" + URLEncoder.encode(contactId, "UTF-8");
                 URL url = new URL(API.GET_USER_STATUS);
-                HttpsURLConnection httpsURLConnection = (HttpsURLConnection) url.openConnection();
+                HttpURLConnection httpsURLConnection = (HttpURLConnection) url.openConnection();
                 httpsURLConnection.setRequestMethod("POST");
                 httpsURLConnection.setDoOutput(true);
                 httpsURLConnection.connect();
@@ -116,7 +115,7 @@ public class HandleMessagesNetworkingAPI {
 //                data += "&" + URLEncoder.encode("approver_id", "UTF-8") + "=" + URLEncoder.encode(contactId, "UTF-8");
 
                 URL url = new URL(API.GET_LAST_VISIT_TIMESTAMP);
-                HttpsURLConnection httpsURLConnection = (HttpsURLConnection) url.openConnection();
+                HttpURLConnection httpsURLConnection = (HttpURLConnection) url.openConnection();
                 httpsURLConnection.setRequestMethod("POST");
                 httpsURLConnection.setDoOutput(true);
                 httpsURLConnection.connect();

@@ -7,7 +7,7 @@
     android:layout_height="wrap_content"
     android:id="@+id/llSentMessage"
     android:orientation="vertical"
-    android:layout_marginTop="1dp"
+    android:layout_marginTop="6dp"
     android:longClickable="true"
     android:clickable="true"
     android:focusable="true"
@@ -30,7 +30,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             tools:text="Today"
-            android:fontFamily="@font/roboto"
+            android:fontFamily="sans-serif"
             android:id="@+id/tvDateDisplay"
             android:gravity="center"
             android:textAlignment="center"
@@ -82,6 +82,17 @@
                     android:layout_height="wrap_content"
                     >
 
+                    <ImageView
+                        android:id="@+id/ivReplyMediaThumbnail"
+                        android:layout_width="45dp"
+                        android:layout_height="45dp"
+                        android:layout_alignParentEnd="true"
+                        android:layout_centerVertical="true"
+                        android:layout_marginEnd="8dp"
+                        android:scaleType="centerCrop"
+                        android:visibility="gone"
+                        android:contentDescription="@string/todo" />
+
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -92,6 +103,7 @@
                         style="@style/messagesTextStyle"
                         android:layout_marginStart="10dp"
                         android:layout_marginTop="5dp"
+                        android:layout_toStartOf="@id/ivReplyMediaThumbnail"
                         />
 
                     <TextView
@@ -106,6 +118,7 @@
                         android:layout_marginBottom="5dp"
                         android:maxLines="1"
                         android:ellipsize="end"
+                        android:layout_toStartOf="@id/ivReplyMediaThumbnail"
                         />
 
                 </RelativeLayout>
@@ -118,7 +131,7 @@
                 android:id="@+id/tvMessage"
                 tools:text="@string/wallpaper_preview_right_msg"
                 android:textAppearance="@style/TextAppearance.AppCompat.Subhead"
-                android:fontFamily="@font/roboto"
+                android:fontFamily="sans-serif"
                 android:layout_marginTop="5dp"
                 android:layout_marginStart="10dp"
                 android:layout_marginEnd="10dp"
@@ -168,6 +181,17 @@
                     />
 
                 <ImageView
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:id="@+id/ivRetryMessage"
+                    android:visibility="gone"
+                    android:src="@drawable/ic_retry"
+                    android:layout_marginEnd="5dp"
+                    app:tint="#D32F2F"
+                    android:contentDescription="@string/todo"
+                    />
+
+                <ImageView
                     android:layout_width="@dimen/extra_small_text_size"
                     android:layout_height="@dimen/extra_small_text_size"
                     android:id="@+id/ivSeenImage"
@@ -184,7 +208,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     tools:text="02:30 AM"
-                    android:fontFamily="@font/roboto"
+                    android:fontFamily="sans-serif"
                     android:layout_marginEnd="5dp"
                     style="@style/messagesIconsStyle"
                     android:textSize="@dimen/extra_small_text_size"
