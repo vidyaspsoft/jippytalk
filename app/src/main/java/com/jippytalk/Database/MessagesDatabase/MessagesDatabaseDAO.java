@@ -74,12 +74,160 @@ public class MessagesDatabaseDAO {
         }
     }
 
+    // Back-compat overload — callers that haven't been updated to pass room_id
+    // get an empty-string default. Once every call site is updated, this can
+    // be removed. Functionally identical to the roomId overload below.
     public boolean insertMessage(String messageId, int messageDirection, String receiverId,
                                  String message, int messageStatus, int needPush,
                                  long timestamp, long receiveTimestamp, long readTimestamp,
                                  int starredStatus, int editedStatus, int messageType,
                                  double latitude, double longitude, int isReply,
                                  String replyToMessageId, int chatArchive) {
+        return insertMessage(messageId, messageDirection, receiverId,
+                message, messageStatus, needPush,
+                timestamp, receiveTimestamp, readTimestamp,
+                starredStatus, editedStatus, messageType,
+                latitude, longitude, isReply,
+                replyToMessageId, chatArchive, "");
+    }
+
+    public boolean insertMessage(String messageId, int messageDirection, String receiverId,
+                                 String message, int messageStatus, int needPush,
+                                 long timestamp, long receiveTimestamp, long readTimestamp,
+                                 int starredStatus, int editedStatus, int messageType,
+                                 double latitude, double longitude, int isReply,
+                                 String replyToMessageId, int chatArchive,
+                                 String roomId) {
+        boolean isSuccess = false;
+        try  {
+            SQLiteDatabase sqLiteDatabase   =   messagesDatabase.getWritableDb();
+            try {
+                sqLiteDatabase.beginTransaction();
+                ContentValues values = new ContentValues();
+                values.put(MessagesDatabase.MESSAGE_ID, messageId);
+                values.put(MessagesDatabase.MESSAGE_DIRECTION, messageDirection);
+                values.put(MessagesDatabase.RECEIVER_ID, receiverId);
+                values.put(MessagesDatabase.MESSAGE, message);
+                values.put(MessagesDatabase.MESSAGE_STATUS, messageStatus);
+                values.put(MessagesDatabase.NEED_PUSH, needPush);
+                values.put(MessagesDatabase.TIMESTAMP, timestamp);
+                values.put(MessagesDatabase.RECEIVE_TIMESTAMP, receiveTimestamp);
+                values.put(MessagesDatabase.READ_TIMESTAMP, readTimestamp);
+                values.put(MessagesDatabase.EDIT_STATUS, editedStatus);
+                values.put(MessagesDatabase.STARRED, starredStatus);
+                values.put(MessagesDatabase.MESSAGE_TYPE, messageType);
+                values.put(MessagesDatabase.LATITUDE, latitude);
+                values.put(MessagesDatabase.LONGITUDE, longitude);
+                values.put(MessagesDatabase.IS_REPLY, isReply);
+                values.put(MessagesDatabase.REPLY_TO_MESSAGE_ID, replyToMessageId);
+                values.put(MessagesDatabase.ROOM_ID, roomId != null ? roomId : "");
+
+                // Use CONFLICT_IGNORE so duplicate message_ids (e.g. server echoes our own
+                // sent messages back via fetchMessages) silently skip instead of throwing.
+                long result = sqLiteDatabase.insertWithOnConflict(
+                        MessagesDatabase.MESSAGES_TABLE, null, values,
+                        SQLiteDatabase.CONFLICT_IGNORE);
+
+                if (result != -1) {
+                    try {
+                        long finalTimeStamp;
+                        if (messageDirection == MessagesManager.MESSAGE_INCOMING) {
+                            finalTimeStamp  =   receiveTimestamp;
+                        } else {
+                            finalTimeStamp  =   timestamp;
+                        }
+                        ContentValues contentValues   = new ContentValues();
+                        contentValues.put(MessagesDatabase.CHAT_ID, receiverId);
+                        contentValues.put(MessagesDatabase.CHAT_LAST_MESSAGE_ID_FK, result);
+                        contentValues.put(MessagesDatabase.SORT_LAST_MESSAGE_TIME, finalTimeStamp);
+                        contentValues.put(MessagesDatabase.CHAT_ARCHIVE, chatArchive);
+                        if (roomId != null && !roomId.isEmpty()) {
+                            contentValues.put(MessagesDatabase.ROOM_ID, roomId);
+                        }
+
+                        if (messageType == MessagesManager.SYSTEM_MESSAGE_TYPE) {
+                            sqLiteDatabase.setTransactionSuccessful();
+                            isSuccess   =   true;
+                            return isSuccess;
+                        }
+
+                        long chatInsertResult = sqLiteDatabase.insertWithOnConflict(
+                                CHAT_LIST_TABLE,
+                                null,
+                                contentValues,
+                                SQLiteDatabase.CONFLICT_IGNORE
+                        );
+
+                        if (chatInsertResult == -1) {
+                            // Already exists → update only necessary columns
+                            ContentValues updateValues   =   new ContentValues();
+                            updateValues.put(MessagesDatabase.CHAT_LAST_MESSAGE_ID_FK, result);
+                            updateValues.put(MessagesDatabase.SORT_LAST_MESSAGE_TIME, finalTimeStamp);
+                            if (roomId != null && !roomId.isEmpty()) {
+                                updateValues.put(MessagesDatabase.ROOM_ID, roomId);
+                            }
+
+                            long update  =   sqLiteDatabase.update(CHAT_LIST_TABLE, updateValues,
+                                    MessagesDatabase.CHAT_ID + " =?", new String[]{receiverId});
+                            if (update > 0) {
+                                sqLiteDatabase.setTransactionSuccessful();
+                                isSuccess = true;
+                            }
+                        } else {
+                            sqLiteDatabase.setTransactionSuccessful();
+                            isSuccess = true;
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.e(Extras.LOG_MESSAGE, "Unable to insert chat list caught exception " + e.getMessage());
+                    }
+                } else {
+                    // With CONFLICT_IGNORE, result == -1 means a row with the
+                    // same UNIQUE message_id already exists and was silently
+                    // skipped — NOT an error. This is the normal path when we
+                    // re-fetch REST history for a chat we already opened before.
+                    Log.i(Extras.LOG_MESSAGE, "Skipped duplicate message row: " + messageId);
+                }
+            }
+            catch (SQLException e) {
+                Log.e(Extras.LOG_MESSAGE, "Unexpected error during insertMessage caught sql exception: " + e.getMessage());
+            }
+            finally {
+                sqLiteDatabase.endTransaction();
+            }
+        }
+        catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "Unexpected error during insertMessage: " + e.getMessage());
+        }
+
+        return isSuccess;
+    }
+
+
+    // ---------- Media Message Insert (v8) ----------
+
+    /**
+     * Inserts a file/media message row with all media metadata fields populated
+     * as real columns (no JSON blob). The media file BYTES are NOT stored — only
+     * paths to the on-device plaintext copies live in LOCAL_FILE_PATH /
+     * LOCAL_THUMBNAIL_PATH. Mirrors the chat_list sync behavior of insertMessage
+     * so the chat list always reflects the latest message for the contact.
+     */
+    public boolean insertMessageWithMedia(String messageId, int messageDirection, String receiverId,
+                                          String message, int messageStatus, int needPush,
+                                          long timestamp, long receiveTimestamp, long readTimestamp,
+                                          int starredStatus, int editedStatus, int messageType,
+                                          double latitude, double longitude, int isReply,
+                                          String replyToMessageId, int chatArchive,
+                                          // media columns
+                                          String fileName, String contentType, String contentSubtype,
+                                          String caption, int mediaWidth, int mediaHeight,
+                                          long mediaDuration, long fileSize,
+                                          String s3Key, String s3Bucket, String fileTransferId,
+                                          String localFilePath, String localThumbnailPath,
+                                          String remoteThumbnailUrl, String encryptedS3Url,
+                                          String encryptionKey, String encryptionIv,
+                                          String roomId) {
         boolean isSuccess = false;
         try  {
             SQLiteDatabase sqLiteDatabase   =   messagesDatabase.getWritableDb();
@@ -103,13 +251,29 @@ public class MessagesDatabaseDAO {
                 values.put(MessagesDatabase.IS_REPLY, isReply);
                 values.put(MessagesDatabase.REPLY_TO_MESSAGE_ID, replyToMessageId);
 
-                // Use CONFLICT_IGNORE so duplicate message_ids (e.g. server echoes our own
-                // sent messages back via fetchMessages) silently skip instead of throwing.
+                // Media columns — file BYTES are never stored, only paths.
+                values.put(MessagesDatabase.FILE_NAME,            fileName            != null ? fileName            : "");
+                values.put(MessagesDatabase.CONTENT_TYPE,         contentType         != null ? contentType         : "");
+                values.put(MessagesDatabase.CONTENT_SUBTYPE,      contentSubtype      != null ? contentSubtype      : "");
+                values.put(MessagesDatabase.CAPTION,              caption             != null ? caption             : "");
+                values.put(MessagesDatabase.MEDIA_WIDTH,          mediaWidth);
+                values.put(MessagesDatabase.MEDIA_HEIGHT,         mediaHeight);
+                values.put(MessagesDatabase.MEDIA_DURATION,       mediaDuration);
+                values.put(MessagesDatabase.FILE_SIZE,            fileSize);
+                values.put(MessagesDatabase.S3_KEY,               s3Key               != null ? s3Key               : "");
+                values.put(MessagesDatabase.S3_BUCKET,            s3Bucket            != null ? s3Bucket            : "");
+                values.put(MessagesDatabase.FILE_TRANSFER_ID,     fileTransferId      != null ? fileTransferId      : "");
+                values.put(MessagesDatabase.LOCAL_FILE_PATH,      localFilePath       != null ? localFilePath       : "");
+                values.put(MessagesDatabase.LOCAL_THUMBNAIL_PATH, localThumbnailPath  != null ? localThumbnailPath  : "");
+                values.put(MessagesDatabase.REMOTE_THUMBNAIL_URL, remoteThumbnailUrl  != null ? remoteThumbnailUrl  : "");
+                values.put(MessagesDatabase.ENCRYPTED_S3_URL,     encryptedS3Url      != null ? encryptedS3Url      : "");
+                values.put(MessagesDatabase.ENCRYPTION_KEY,       encryptionKey       != null ? encryptionKey       : "");
+                values.put(MessagesDatabase.ENCRYPTION_IV,        encryptionIv        != null ? encryptionIv        : "");
+                values.put(MessagesDatabase.ROOM_ID,              roomId              != null ? roomId              : "");
+
                 long result = sqLiteDatabase.insertWithOnConflict(
                         MessagesDatabase.MESSAGES_TABLE, null, values,
                         SQLiteDatabase.CONFLICT_IGNORE);
-
-                Log.e(Extras.LOG_MESSAGE, "values are " + values);
 
                 if (result != -1) {
                     try {
@@ -124,11 +288,8 @@ public class MessagesDatabaseDAO {
                         contentValues.put(MessagesDatabase.CHAT_LAST_MESSAGE_ID_FK, result);
                         contentValues.put(MessagesDatabase.SORT_LAST_MESSAGE_TIME, finalTimeStamp);
                         contentValues.put(MessagesDatabase.CHAT_ARCHIVE, chatArchive);
-
-                        if (messageType == MessagesManager.SYSTEM_MESSAGE_TYPE) {
-                            sqLiteDatabase.setTransactionSuccessful();
-                            isSuccess   =   true;
-                            return isSuccess;
+                        if (roomId != null && !roomId.isEmpty()) {
+                            contentValues.put(MessagesDatabase.ROOM_ID, roomId);
                         }
 
                         long chatInsertResult = sqLiteDatabase.insertWithOnConflict(
@@ -143,6 +304,9 @@ public class MessagesDatabaseDAO {
                             ContentValues updateValues   =   new ContentValues();
                             updateValues.put(MessagesDatabase.CHAT_LAST_MESSAGE_ID_FK, result);
                             updateValues.put(MessagesDatabase.SORT_LAST_MESSAGE_TIME, finalTimeStamp);
+                            if (roomId != null && !roomId.isEmpty()) {
+                                updateValues.put(MessagesDatabase.ROOM_ID, roomId);
+                            }
 
                             long update  =   sqLiteDatabase.update(CHAT_LIST_TABLE, updateValues,
                                     MessagesDatabase.CHAT_ID + " =?", new String[]{receiverId});
@@ -156,25 +320,277 @@ public class MessagesDatabaseDAO {
                         }
                     }
                     catch (Exception e) {
-                        Log.e(Extras.LOG_MESSAGE, "Unable to insert chat list caught exception " + e.getMessage());
+                        Log.e(Extras.LOG_MESSAGE, "Unable to insert chat list (media) caught exception " + e.getMessage());
                     }
                 } else {
-                    Log.e(Extras.LOG_MESSAGE, "Insertion failed, result: " + result);
+                    // result == -1 with CONFLICT_IGNORE = row already exists
+                    // (same message_id UNIQUE constraint hit). Normal path
+                    // when REST history re-fetches a message we already stored.
+                    Log.i(Extras.LOG_MESSAGE, "Skipped duplicate media row: " + messageId);
                 }
             }
             catch (SQLException e) {
-                Log.e(Extras.LOG_MESSAGE, "Unexpected error during insertMessage caught sql exception: " + e.getMessage());
+                Log.e(Extras.LOG_MESSAGE, "Unexpected error during insertMessageWithMedia caught sql exception: " + e.getMessage());
             }
             finally {
                 sqLiteDatabase.endTransaction();
             }
         }
         catch (Exception e) {
-            Log.e(Extras.LOG_MESSAGE, "Unexpected error during insertMessage: " + e.getMessage());
+            Log.e(Extras.LOG_MESSAGE, "Unexpected error during insertMessageWithMedia: " + e.getMessage());
         }
 
         return isSuccess;
     }
+
+
+    // ---------- Media Path Updaters (v8) ----------
+
+    /**
+     * Sets LOCAL_FILE_PATH on a message row after the file is copied/downloaded.
+     * Only this single column is touched — does not affect message text or any
+     * other fields.
+     */
+    public boolean updateLocalFilePath(String messageId, String localFilePath) {
+        boolean isSuccess = false;
+        try {
+            SQLiteDatabase sqLiteDatabase = messagesDatabase.getWritableDb();
+            try {
+                sqLiteDatabase.beginTransaction();
+                ContentValues contentValues = new ContentValues();
+                contentValues.put(MessagesDatabase.LOCAL_FILE_PATH, localFilePath != null ? localFilePath : "");
+                int rowAffected = sqLiteDatabase.update(MessagesDatabase.MESSAGES_TABLE,
+                        contentValues,
+                        MessagesDatabase.MESSAGE_ID + "=?", new String[]{messageId});
+                if (rowAffected > 0) {
+                    sqLiteDatabase.setTransactionSuccessful();
+                    isSuccess = true;
+                } else {
+                    Log.e(Extras.LOG_MESSAGE, "updateLocalFilePath: no row matched for " + messageId);
+                }
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateLocalFilePath inner: " + e.getMessage());
+            } finally {
+                sqLiteDatabase.endTransaction();
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "updateLocalFilePath outer: " + e.getMessage());
+        }
+        return isSuccess;
+    }
+
+    /**
+     * Sets LOCAL_THUMBNAIL_PATH on a message row after a thumbnail is generated
+     * (sender) or downloaded + decrypted (receiver).
+     */
+    public boolean updateLocalThumbnailPath(String messageId, String localThumbnailPath) {
+        boolean isSuccess = false;
+        try {
+            SQLiteDatabase sqLiteDatabase = messagesDatabase.getWritableDb();
+            try {
+                sqLiteDatabase.beginTransaction();
+                ContentValues contentValues = new ContentValues();
+                contentValues.put(MessagesDatabase.LOCAL_THUMBNAIL_PATH, localThumbnailPath != null ? localThumbnailPath : "");
+                int rowAffected = sqLiteDatabase.update(MessagesDatabase.MESSAGES_TABLE,
+                        contentValues,
+                        MessagesDatabase.MESSAGE_ID + "=?", new String[]{messageId});
+                if (rowAffected > 0) {
+                    sqLiteDatabase.setTransactionSuccessful();
+                    isSuccess = true;
+                } else {
+                    Log.e(Extras.LOG_MESSAGE, "updateLocalThumbnailPath: no row matched for " + messageId);
+                }
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateLocalThumbnailPath inner: " + e.getMessage());
+            } finally {
+                sqLiteDatabase.endTransaction();
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "updateLocalThumbnailPath outer: " + e.getMessage());
+        }
+        return isSuccess;
+    }
+
+    /**
+     * Sets REMOTE_THUMBNAIL_URL on a message row after the encrypted thumbnail
+     * has been uploaded to S3 (sender side).
+     */
+    public boolean updateRemoteThumbnailUrl(String messageId, String remoteThumbnailUrl) {
+        boolean isSuccess = false;
+        try {
+            SQLiteDatabase sqLiteDatabase = messagesDatabase.getWritableDb();
+            try {
+                sqLiteDatabase.beginTransaction();
+                ContentValues contentValues = new ContentValues();
+                contentValues.put(MessagesDatabase.REMOTE_THUMBNAIL_URL,
+                        remoteThumbnailUrl != null ? remoteThumbnailUrl : "");
+                int rowAffected = sqLiteDatabase.update(MessagesDatabase.MESSAGES_TABLE,
+                        contentValues,
+                        MessagesDatabase.MESSAGE_ID + "=?", new String[]{messageId});
+                if (rowAffected > 0) {
+                    sqLiteDatabase.setTransactionSuccessful();
+                    isSuccess = true;
+                }
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateRemoteThumbnailUrl inner: " + e.getMessage());
+            } finally {
+                sqLiteDatabase.endTransaction();
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "updateRemoteThumbnailUrl outer: " + e.getMessage());
+        }
+        return isSuccess;
+    }
+
+    /**
+     * Sets the S3 key + bucket on an outgoing media row after a successful upload.
+     * Used so the chat list / repository always reflects the latest sync state
+     * without rewriting the message column.
+     */
+    public boolean updateMessageS3Info(String messageId, String s3Key, String s3Bucket, String encryptedS3Url) {
+        boolean isSuccess = false;
+        try {
+            SQLiteDatabase sqLiteDatabase = messagesDatabase.getWritableDb();
+            try {
+                sqLiteDatabase.beginTransaction();
+                ContentValues contentValues = new ContentValues();
+                contentValues.put(MessagesDatabase.S3_KEY,           s3Key           != null ? s3Key           : "");
+                contentValues.put(MessagesDatabase.S3_BUCKET,        s3Bucket        != null ? s3Bucket        : "");
+                contentValues.put(MessagesDatabase.ENCRYPTED_S3_URL, encryptedS3Url  != null ? encryptedS3Url  : "");
+                int rowAffected = sqLiteDatabase.update(MessagesDatabase.MESSAGES_TABLE,
+                        contentValues,
+                        MessagesDatabase.MESSAGE_ID + "=?", new String[]{messageId});
+                if (rowAffected > 0) {
+                    sqLiteDatabase.setTransactionSuccessful();
+                    isSuccess = true;
+                }
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateMessageS3Info inner: " + e.getMessage());
+            } finally {
+                sqLiteDatabase.endTransaction();
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "updateMessageS3Info outer: " + e.getMessage());
+        }
+        return isSuccess;
+    }
+
+
+    // ---------- REST history UPSERT helpers (v8) ----------
+
+    /**
+     * Updates server-authoritative fields on an EXISTING text message row,
+     * without touching device-local fields. Called after INSERT OR IGNORE
+     * returns a duplicate — the row already exists from a previous REST
+     * fetch / WS delivery, but the server may now have newer values for:
+     *
+     *   - message_status   (delivered / seen may have flipped)
+     *   - read_timestamp   (recipient may have read it since last fetch)
+     *   - message          (may have been edited by the sender)
+     *
+     * PRESERVED (never touched here): local_file_path, local_thumbnail_path,
+     * starred_status, edit_status, need_push, and everything else.
+     */
+    public boolean updateTextMessageServerFields(String messageId,
+                                                 String message,
+                                                 int messageStatus,
+                                                 long readTimestamp) {
+        boolean isSuccess = false;
+        try {
+            SQLiteDatabase db = messagesDatabase.getWritableDb();
+            try {
+                db.beginTransaction();
+                ContentValues cv = new ContentValues();
+                cv.put(MessagesDatabase.MESSAGE_STATUS, messageStatus);
+                if (readTimestamp > 0) {
+                    cv.put(MessagesDatabase.READ_TIMESTAMP, readTimestamp);
+                }
+                if (message != null && !message.isEmpty()) {
+                    cv.put(MessagesDatabase.MESSAGE, message);
+                }
+                int rows = db.update(MessagesDatabase.MESSAGES_TABLE, cv,
+                        MessagesDatabase.MESSAGE_ID + "=?", new String[]{messageId});
+                if (rows > 0) {
+                    db.setTransactionSuccessful();
+                    isSuccess = true;
+                }
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateTextMessageServerFields inner: " + e.getMessage());
+            } finally {
+                db.endTransaction();
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "updateTextMessageServerFields outer: " + e.getMessage());
+        }
+        return isSuccess;
+    }
+
+    /**
+     * Updates ONLY server-side state changes on an EXISTING media message
+     * row. Deliberately conservative — touches just:
+     *
+     *   - message_status   (delivered / seen may have flipped)
+     *   - read_timestamp   (recipient may have read it since last fetch)
+     *   - message / caption (only if the sender edited it and new text is
+     *                        non-empty; otherwise preserved)
+     *
+     * PRESERVED (NEVER overwritten) — includes everything media-related:
+     *   - local_file_path, local_thumbnail_path  (device-local)
+     *   - encrypted_s3_url, remote_thumbnail_url (URLs we already have)
+     *   - s3_key, s3_bucket, file_transfer_id    (stable identifiers)
+     *   - encryption_key, encryption_iv          (per-message crypto material)
+     *   - starred_status, edit_status, need_push (local flags)
+     *
+     * Rationale: once the device has processed a message (downloaded the
+     * file, decrypted the thumbnail, saved presigned URLs), those local
+     * references should never be clobbered by a re-fetch of REST history.
+     * The server's role is only to tell us when the tick-status changed.
+     */
+    public boolean updateMediaMessageServerFields(String messageId,
+                                                  String message,
+                                                  int messageStatus,
+                                                  long readTimestamp,
+                                                  String caption) {
+        boolean isSuccess = false;
+        try {
+            SQLiteDatabase db = messagesDatabase.getWritableDb();
+            try {
+                db.beginTransaction();
+                ContentValues cv = new ContentValues();
+                cv.put(MessagesDatabase.MESSAGE_STATUS, messageStatus);
+                if (readTimestamp > 0) {
+                    cv.put(MessagesDatabase.READ_TIMESTAMP, readTimestamp);
+                }
+                if (message != null && !message.isEmpty()) {
+                    cv.put(MessagesDatabase.MESSAGE, message);
+                }
+                if (caption != null && !caption.isEmpty()) {
+                    cv.put(MessagesDatabase.CAPTION, caption);
+                }
+                // Intentionally NOT touched (preserved on every REST re-fetch):
+                //   LOCAL_FILE_PATH, LOCAL_THUMBNAIL_PATH,
+                //   ENCRYPTED_S3_URL, REMOTE_THUMBNAIL_URL,
+                //   S3_KEY, S3_BUCKET, FILE_TRANSFER_ID,
+                //   ENCRYPTION_KEY, ENCRYPTION_IV,
+                //   STARRED, EDIT_STATUS, NEED_PUSH
+
+                int rows = db.update(MessagesDatabase.MESSAGES_TABLE, cv,
+                        MessagesDatabase.MESSAGE_ID + "=?", new String[]{messageId});
+                if (rows > 0) {
+                    db.setTransactionSuccessful();
+                    isSuccess = true;
+                }
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateMediaMessageServerFields inner: " + e.getMessage());
+            } finally {
+                db.endTransaction();
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "updateMediaMessageServerFields outer: " + e.getMessage());
+        }
+        return isSuccess;
+    }
+
 
     public void updateLastMessagePosition(String contactId, int lastPosition) {
         SQLiteDatabase  sqLiteDatabase      =   messagesDatabase.getWritableDb();
@@ -215,6 +631,87 @@ public class MessagesDatabaseDAO {
             Log.e(Extras.LOG_MESSAGE, "unable to get messages from database issue in DAO: " + e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * v9: fetches every row belonging to a server-assigned room_id. Used by
+     * the chat screen when it has the roomId from /api/rooms. Falls back to
+     * receiver_id matching for rows that don't have room_id populated yet
+     * (e.g. legacy rows inserted before v9 migration ran or before backfill
+     * completed). Pass empty string for receiver_id to disable the fallback.
+     */
+    public Cursor getMessagesByRoomId(String roomId, String receiverIdFallback) {
+        try {
+            SQLiteDatabase sqLiteDatabase = messagesDatabase.getReadableDb();
+            String fallback = receiverIdFallback != null ? receiverIdFallback : "";
+            return sqLiteDatabase.rawQuery(
+                    "SELECT m.*, r.message AS replied_message_text, r.message_direction AS replied_message_direction " +
+                            "FROM " + MessagesDatabase.MESSAGES_TABLE + " m " +
+                            "LEFT JOIN " + MessagesDatabase.MESSAGES_TABLE + " r " +
+                            "ON m.reply_to = r.message_id " +
+                            "WHERE m." + MessagesDatabase.ROOM_ID + " = ? " +
+                            "   OR ((m." + MessagesDatabase.ROOM_ID + " IS NULL OR m." + MessagesDatabase.ROOM_ID + " = '') " +
+                            "       AND m.receiver_id = ? AND ? <> '') " +
+                            "ORDER BY m.sqlite_message_id ASC",
+                    new String[] { roomId, fallback, fallback }
+            );
+        } catch (SQLException e) {
+            Log.e(Extras.LOG_MESSAGE, "getMessagesByRoomId failed: " + e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * v9 backfill: fills in room_id for legacy rows that were inserted before
+     * v9 was deployed (or before /api/rooms provided the mapping).
+     *
+     * For every row in `messages` AND `chat_list` where receiver_id = chatPartnerId
+     * AND room_id is empty, sets room_id = the supplied value. Safe to call
+     * repeatedly — only touches rows where room_id is still blank.
+     */
+    public int backfillRoomIdForContact(String roomId, String chatPartnerId) {
+        if (roomId == null || roomId.isEmpty()
+                || chatPartnerId == null || chatPartnerId.isEmpty()) {
+            return 0;
+        }
+        int totalUpdated = 0;
+        try {
+            SQLiteDatabase db = messagesDatabase.getWritableDb();
+            try {
+                db.beginTransaction();
+
+                ContentValues cv = new ContentValues();
+                cv.put(MessagesDatabase.ROOM_ID, roomId);
+
+                int m = db.update(MessagesDatabase.MESSAGES_TABLE, cv,
+                        MessagesDatabase.RECEIVER_ID + "=? AND ("
+                                + MessagesDatabase.ROOM_ID + " IS NULL OR "
+                                + MessagesDatabase.ROOM_ID + " = '')",
+                        new String[]{chatPartnerId});
+
+                int c = db.update(CHAT_LIST_TABLE, cv,
+                        MessagesDatabase.CHAT_ID + "=? AND ("
+                                + MessagesDatabase.ROOM_ID + " IS NULL OR "
+                                + MessagesDatabase.ROOM_ID + " = '')",
+                        new String[]{chatPartnerId});
+
+                totalUpdated = m + c;
+                db.setTransactionSuccessful();
+
+                if (totalUpdated > 0) {
+                    Log.i(Extras.LOG_MESSAGE, "backfillRoomIdForContact: "
+                            + chatPartnerId + " → " + roomId
+                            + " (messages=" + m + ", chat_list=" + c + ")");
+                }
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "backfillRoomIdForContact inner: " + e.getMessage());
+            } finally {
+                db.endTransaction();
+            }
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "backfillRoomIdForContact outer: " + e.getMessage());
+        }
+        return totalUpdated;
     }
 
     public Cursor getMessagesPaginationForContact(String receiver_id, int limit, int offset) {

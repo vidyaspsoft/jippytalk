@@ -665,6 +665,7 @@ public class WebSocketConnection {
             String  encryptionIv    =   payload.optString("encryption_iv", "");
             String  messageType     =   payload.optString("message_type", "text");
             String  createdAt       =   payload.optString("created_at", "");
+            String  roomId          =   payload.optString("room_id", "");
             boolean delivered       =   payload.optBoolean("delivered", false);
 
             // Decrypt ciphertext if encryption_key + iv are present
@@ -680,30 +681,13 @@ public class WebSocketConnection {
                 ciphertext = rawCiphertext;
             }
 
-            // For file messages, the decrypted ciphertext IS the metadata JSON.
-            // Parse file fields from it if available; otherwise fall back to
-            // top-level payload fields (backward compat with unencrypted sends).
+            // For file messages: all fields come from top-level payload keys.
+            // ciphertext = encrypted caption only (not metadata).
             String  fileTransferId  =   payload.optString("file_transfer_id", "");
             String  s3Key           =   payload.optString("s3_key", "");
             String  fileName        =   payload.optString("file_name", "");
             String  contentType     =   payload.optString("content_type", "");
             String  contentSubtype  =   payload.optString("content_subtype", "");
-
-            if ("file".equals(messageType) && ciphertext.startsWith("{")) {
-                try {
-                    JSONObject decryptedMeta = new JSONObject(ciphertext);
-                    if (decryptedMeta.has("s3_key"))
-                        s3Key           =   decryptedMeta.optString("s3_key", s3Key);
-                    if (decryptedMeta.has("file_name"))
-                        fileName        =   decryptedMeta.optString("file_name", fileName);
-                    if (decryptedMeta.has("content_type"))
-                        contentType     =   decryptedMeta.optString("content_type", contentType);
-                    if (decryptedMeta.has("content_subtype"))
-                        contentSubtype  =   decryptedMeta.optString("content_subtype", contentSubtype);
-                    if (decryptedMeta.has("file_transfer_id"))
-                        fileTransferId  =   decryptedMeta.optString("file_transfer_id", fileTransferId);
-                } catch (JSONException ignored) {}
-            }
 
             Log.e(Extras.LOG_SOCKET_RECV, "[INCOMING] from=" + senderId
                     + " id=" + messageId + " clientId=" + clientMsgId
@@ -726,30 +710,6 @@ public class WebSocketConnection {
                                         ? MessagesManager.DOCUMENT_MESSAGE
                                         : MessagesManager.TEXT_MESSAGE;
 
-            // Store either plaintext body or a stringified file metadata blob.
-            // For files we stuff everything into the message field for now so the
-            // adapter can show file_name / s3_key; a proper media-message row will
-            // replace this once the full file attachment schema is wired in.
-            final String bodyToStore;
-            if ("file".equals(messageType)) {
-                JSONObject metadata = new JSONObject();
-                metadata.put("file_transfer_id", fileTransferId);
-                metadata.put("s3_key", s3Key);
-                metadata.put("file_name", fileName);
-                metadata.put("content_type", contentType);
-                metadata.put("content_subtype", contentSubtype);
-                metadata.put("caption", payload.optString("caption", ""));
-                metadata.put("width", payload.optInt("width", 0));
-                metadata.put("height", payload.optInt("height", 0));
-                metadata.put("duration", payload.optLong("duration", 0));
-                metadata.put("thumbnail", payload.optString("thumbnail", ""));
-                metadata.put("encrypted_s3_url", payload.optString("encrypted_s3_url", ""));
-                metadata.put("file_size", payload.optLong("file_size", 0));
-                bodyToStore = metadata.toString();
-            } else {
-                bodyToStore = ciphertext;
-            }
-
             if (messagesRepository == null) {
                 Log.e(Extras.LOG_SOCKET_RECV, "[INCOMING] messagesRepository null, queueing insert");
                 return;
@@ -760,30 +720,99 @@ public class WebSocketConnection {
                                         ? MessagesManager.MESSAGE_DELIVERED
                                         : MessagesManager.MESSAGE_DELIVERED_LOCALLY;
 
-            messagesRepository.insertMessageToLocalStorageFromService(
-                    messageId,
-                    MessagesManager.MESSAGE_INCOMING,
-                    senderId,                       // chat partner id = sender
-                    bodyToStore,
-                    messageStatus,
-                    MessagesManager.NO_NEED_TO_PUSH_MESSAGE,
-                    now,                            // sent ts
-                    now,                            // received ts
-                    MessagesManager.DEFAULT_READ_TIMESTAMP,
-                    MessagesManager.MESSAGE_NOT_STARRED,
-                    MessagesManager.MESSAGE_NOT_EDITED,
-                    localMessageType,
-                    0, 0,                           // lat, lng
-                    MessagesManager.DEFAULT_MSG_TO_MSG_REPLY,
-                    "",
-                    com.jippytalk.Managers.ChatManager.UNARCHIVE_CHAT,
-                    () -> {
-                        // Refresh the open chat, if it's this sender's chat
-                        if (openedChatId != null && openedChatId.equals(senderId)
-                                && messageCallBacks != null) {
-                            messagesRepository.getMessagesForContact(senderId);
-                        }
-                    });
+            if ("file".equals(messageType)) {
+                // ---- Decrypt URL fields with the per-message AES key+iv ----
+                String decryptedFileUrl = "";
+                String encS3Url = payload.optString("encrypted_s3_url", "");
+                if (!encS3Url.isEmpty() && !encryptionKey.isEmpty() && !encryptionIv.isEmpty()) {
+                    String d = com.jippytalk.Encryption.MessageCryptoHelper.decrypt(
+                            encS3Url, encryptionKey, encryptionIv);
+                    decryptedFileUrl = d != null ? d : "";
+                } else if (!encS3Url.isEmpty() && encS3Url.startsWith("http")) {
+                    decryptedFileUrl = encS3Url;  // backend presigned URL (plaintext)
+                }
+
+                String decryptedThumbUrl = "";
+                String backendThumbUrl = payload.optString("thumbnail_url", "");
+                if (!backendThumbUrl.isEmpty()) {
+                    decryptedThumbUrl = backendThumbUrl;  // backend presigned (best)
+                } else {
+                    String encThumb = payload.optString("thumbnail", "");
+                    if (!encThumb.isEmpty() && !encryptionKey.isEmpty() && !encryptionIv.isEmpty()) {
+                        String d = com.jippytalk.Encryption.MessageCryptoHelper.decrypt(
+                                encThumb, encryptionKey, encryptionIv);
+                        decryptedThumbUrl = d != null ? d : "";
+                    }
+                }
+
+                final String fSenderId = senderId;
+                // v8: insert into dedicated columns. The `message` column gets the
+                // decrypted caption text only, so the chat list shows it directly.
+                messagesRepository.insertMediaMessageToLocalStorageFromService(
+                        messageId,
+                        MessagesManager.MESSAGE_INCOMING,
+                        senderId,                       // chat partner id = sender
+                        ciphertext,                     // message column = decrypted caption
+                        messageStatus,
+                        MessagesManager.NO_NEED_TO_PUSH_MESSAGE,
+                        now, now,
+                        MessagesManager.DEFAULT_READ_TIMESTAMP,
+                        MessagesManager.MESSAGE_NOT_STARRED,
+                        MessagesManager.MESSAGE_NOT_EDITED,
+                        MessagesManager.DOCUMENT_MESSAGE,
+                        0, 0,
+                        MessagesManager.DEFAULT_MSG_TO_MSG_REPLY,
+                        "",
+                        com.jippytalk.Managers.ChatManager.UNARCHIVE_CHAT,
+                        fileName, contentType, contentSubtype,
+                        ciphertext,                     // caption column = decrypted caption
+                        payload.optInt("width", 0),
+                        payload.optInt("height", 0),
+                        payload.optLong("duration", 0),
+                        payload.optLong("file_size", 0),
+                        s3Key,
+                        payload.optString("bucket", ""),
+                        fileTransferId,
+                        "",                             // local_file_path (filled after download)
+                        "",                             // local_thumbnail_path (filled after auto-fetch)
+                        decryptedThumbUrl,
+                        decryptedFileUrl,
+                        encryptionKey,
+                        encryptionIv,
+                        roomId,                         // v9: server-assigned room id
+                        () -> {
+                            if (openedChatId != null && openedChatId.equals(fSenderId)
+                                    && messageCallBacks != null) {
+                                messagesRepository.getMessagesForContact(fSenderId);
+                            }
+                        });
+            } else {
+                // Plain text message — original insert path is unchanged.
+                final String fSenderIdT = senderId;
+                messagesRepository.insertMessageToLocalStorageFromService(
+                        messageId,
+                        MessagesManager.MESSAGE_INCOMING,
+                        senderId,                       // chat partner id = sender
+                        ciphertext,
+                        messageStatus,
+                        MessagesManager.NO_NEED_TO_PUSH_MESSAGE,
+                        now, now,
+                        MessagesManager.DEFAULT_READ_TIMESTAMP,
+                        MessagesManager.MESSAGE_NOT_STARRED,
+                        MessagesManager.MESSAGE_NOT_EDITED,
+                        localMessageType,
+                        0, 0,
+                        MessagesManager.DEFAULT_MSG_TO_MSG_REPLY,
+                        "",
+                        com.jippytalk.Managers.ChatManager.UNARCHIVE_CHAT,
+                        roomId,                         // v9: server-assigned room id
+                        () -> {
+                            if (openedChatId != null && openedChatId.equals(fSenderIdT)
+                                    && messageCallBacks != null) {
+                                messagesRepository.getMessagesForContact(fSenderIdT);
+                            }
+                        });
+            }
 
             // Ack back to server so delivery_status can flow back to the sender.
             // Skipped when this is an ack_callback — see the shouldAck javadoc.
@@ -791,7 +820,7 @@ public class WebSocketConnection {
                 sendMessageAck(messageId);
             }
 
-        } catch (JSONException e) {
+        } catch (Exception e) {
             Log.e(Extras.LOG_SOCKET_RECV, "Failed to parse incoming message: " + e.getMessage());
         }
     }
@@ -866,6 +895,27 @@ public class WebSocketConnection {
      * @param localMessageId the local UUID of the sent message
      */
     /** Updates status to SYNCED (✓ single grey tick — server received it). */
+    /**
+     * Encrypts plaintext using a pre-generated Base64 key and IV.
+     * Used to encrypt multiple fields (caption, URL, thumbnail) with the
+     * same key+iv per message.
+     */
+    private String encryptWithKeyIv(String plaintext, String b64Key, String b64Iv) {
+        try {
+            byte[] keyBytes = android.util.Base64.decode(b64Key, android.util.Base64.NO_WRAP);
+            byte[] ivBytes  = android.util.Base64.decode(b64Iv, android.util.Base64.NO_WRAP);
+            javax.crypto.spec.SecretKeySpec keySpec = new javax.crypto.spec.SecretKeySpec(keyBytes, "AES");
+            javax.crypto.spec.GCMParameterSpec gcmSpec = new javax.crypto.spec.GCMParameterSpec(128, ivBytes);
+            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, keySpec, gcmSpec);
+            byte[] encrypted = cipher.doFinal(plaintext.getBytes("UTF-8"));
+            return android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP);
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "encryptWithKeyIv failed: " + e.getMessage());
+            return "";
+        }
+    }
+
     private void markMessageAsSynced(String localMessageId) {
         if (messagesRepository != null) {
             messagesRepository.updateMessageAsSyncedWithServer(
@@ -1149,67 +1199,84 @@ public class WebSocketConnection {
                                 String s3Key, String fileName, long fileSize,
                                 String contentType, String contentSubtype, String caption,
                                 int width, int height, long duration,
-                                String thumbnail, String bucket) {
+                                String thumbnail, String bucket,
+                                String preGeneratedKey, String preGeneratedIv) {
         if (webSocketClient == null || !webSocketClient.isOpen()) {
             Log.e(Extras.LOG_SOCKET_SEND, "[PENDING] WebSocket not open, queueing file send for " + fileName);
             pendingOutboundSends.offer(() -> sendFileMessage(
                     clientMessageId, receiverId, ciphertext, encryptedS3Url, s3Key, fileName,
                     fileSize, contentType, contentSubtype, caption,
-                    width, height, duration, thumbnail, bucket));
+                    width, height, duration, thumbnail, bucket,
+                    preGeneratedKey, preGeneratedIv));
             ensureConnected();
             return;
         }
 
         try {
-            // Encrypt ONLY the caption text — file metadata fields (s3_key,
-            // Build full metadata JSON and ALWAYS encrypt it.
-            // The receiver decrypts using encryption_key + iv to get
-            // s3_key, file_name, thumbnail, caption, dimensions, etc.
-            JSONObject  metadata    =   new JSONObject();
-            metadata.put("s3_key", s3Key != null ? s3Key : "");
-            metadata.put("encrypted_s3_url", encryptedS3Url != null ? encryptedS3Url : "");
-            metadata.put("file_name", fileName != null ? fileName : "");
-            metadata.put("file_size", fileSize);
-            metadata.put("content_type", contentType != null ? contentType : "");
-            metadata.put("content_subtype", contentSubtype != null ? contentSubtype : "");
-            metadata.put("caption", caption != null ? caption : "");
-            metadata.put("width", width);
-            metadata.put("height", height);
-            metadata.put("duration", duration);
-            metadata.put("thumbnail", thumbnail != null ? thumbnail : "");
-            metadata.put("bucket", bucket != null ? bucket : "");
-
+            // Encrypt ONLY the caption text — all file metadata fields are
+            // separate top-level keys. Receiver decrypts ciphertext for caption only.
+            String  captionText =   caption != null ? caption : "";
             com.jippytalk.Encryption.MessageCryptoHelper.EncryptionResult encrypted =
-                    com.jippytalk.Encryption.MessageCryptoHelper.encrypt(metadata.toString());
+                    !captionText.isEmpty()
+                    ? com.jippytalk.Encryption.MessageCryptoHelper.encrypt(captionText)
+                    : null;
 
             JSONObject  payload     =   new JSONObject();
             payload.put("client_message_id", clientMessageId != null ? clientMessageId : "");
             payload.put("receiver_id", receiverId);
             payload.put("message_type", "file");
 
-            if (encrypted != null) {
-                payload.put("ciphertext", encrypted.ciphertext);
-                payload.put("encryption_key", encrypted.key);
-                payload.put("encryption_iv", encrypted.iv);
+            // Build S3 URLs from keys
+            String  bucketName  =   bucket != null && !bucket.isEmpty() ? bucket : API.S3_BUCKET;
+            String  s3BaseUrl   =   "https://" + bucketName + ".s3." + API.S3_REGION + ".amazonaws.com/";
+            String  fileUrl     =   s3Key != null && !s3Key.isEmpty() ? s3BaseUrl + s3Key : "";
+            String  thumbUrl    =   thumbnail != null && !thumbnail.isEmpty() ? s3BaseUrl + thumbnail : "";
+
+            // ONE key + ONE IV per message — REUSED from the upload pipeline so
+            // the same key that encrypted the file/thumbnail bytes is shipped
+            // alongside their URLs. Falls back to fresh keys for legacy callers
+            // that don't pre-generate (e.g. retries before encryption rollout).
+            String  b64Key;
+            String  b64Iv;
+            if (preGeneratedKey != null && !preGeneratedKey.isEmpty()
+                    && preGeneratedIv != null && !preGeneratedIv.isEmpty()) {
+                b64Key = preGeneratedKey;
+                b64Iv  = preGeneratedIv;
             } else {
-                payload.put("ciphertext", metadata.toString());
-                payload.put("encryption_key", "");
-                payload.put("encryption_iv", "");
+                com.jippytalk.Encryption.MessageCryptoHelper.EncryptionResult keyPair =
+                        com.jippytalk.Encryption.MessageCryptoHelper.generateKeyIv();
+                b64Key  =   keyPair != null ? keyPair.key : "";
+                b64Iv   =   keyPair != null ? keyPair.iv : "";
             }
 
-            // Top-level file fields (backend needs for routing/indexing)
+            // Encrypt caption, file URL, thumbnail URL with same key+iv
+            String encCaption   =   !captionText.isEmpty()
+                    ? encryptWithKeyIv(captionText, b64Key, b64Iv) : "";
+            String encFileUrl   =   !fileUrl.isEmpty()
+                    ? encryptWithKeyIv(fileUrl, b64Key, b64Iv) : "";
+            String encThumbUrl  =   !thumbUrl.isEmpty()
+                    ? encryptWithKeyIv(thumbUrl, b64Key, b64Iv) : "";
+
+            payload.put("encryption_key", b64Key);
+            payload.put("encryption_iv", b64Iv);
+
+            // Encrypted fields
+            payload.put("ciphertext", encCaption);
+            payload.put("encrypted_s3_url", encFileUrl);
+            payload.put("thumbnail", encThumbUrl);
+
+            // Plaintext fields (backend needs for routing/indexing)
             payload.put("s3_key", s3Key != null ? s3Key : "");
-            payload.put("encrypted_s3_url", encryptedS3Url != null ? encryptedS3Url : "");
             payload.put("file_name", fileName != null ? fileName : "");
             payload.put("file_size", fileSize);
             payload.put("content_type", contentType != null ? contentType : "");
             payload.put("content_subtype", contentSubtype != null ? contentSubtype : "");
-            payload.put("caption", caption != null ? caption : "");
+            payload.put("caption", captionText);
             payload.put("width", width);
             payload.put("height", height);
             payload.put("duration", duration);
-            payload.put("thumbnail", thumbnail != null ? thumbnail : "");
-            payload.put("bucket", bucket != null ? bucket : "");
+            payload.put("bucket", bucketName);
+            payload.put("region", API.S3_REGION);
 
             JSONObject  envelope    =   new JSONObject();
             envelope.put("type", "file");

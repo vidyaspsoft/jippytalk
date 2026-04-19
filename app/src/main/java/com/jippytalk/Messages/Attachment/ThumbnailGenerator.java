@@ -33,6 +33,15 @@ public class ThumbnailGenerator {
      * @return a File pointing to the generated thumbnail JPEG, or null if no thumbnail
      *         can be created (docs, audio, or failure)
      */
+    /**
+     * Convenience overload that takes an absolute file path instead of a Uri.
+     */
+    public static File generateThumbnail(Context context, String filePath, String contentType) {
+        if (filePath == null || filePath.isEmpty()) return null;
+        return generateThumbnail(context,
+                android.net.Uri.fromFile(new java.io.File(filePath)), contentType);
+    }
+
     public static File generateThumbnail(Context context, Uri uri, String contentType) {
         if (contentType == null) return null;
 
@@ -101,10 +110,27 @@ public class ThumbnailGenerator {
         }
     }
 
+    // Hard cap for the PDF thumbnail raster. At 1600 × 1600 × 4 B/px
+    // that's ~10 MB peak — safe even on low-RAM devices. A 200dp chat
+    // thumbnail never needs more resolution than this.
+    private static final int PDF_THUMB_MAX_DIMENSION   =   1600;
+    // Never allocate a bitmap larger than this (in bytes). 20 MB gives
+    // plenty of headroom but guarantees we never OOM on pathological PDFs.
+    private static final long PDF_THUMB_MAX_BYTES      =   20L * 1024 * 1024;
+
     private static Bitmap generatePdfThumbnail(Context context, Uri uri) {
         try {
-            android.os.ParcelFileDescriptor pfd =
-                    context.getContentResolver().openFileDescriptor(uri, "r");
+            // Open file descriptor — use direct file access for file:// URIs
+            // (ContentResolver fails on file:// URIs on modern Android)
+            android.os.ParcelFileDescriptor pfd;
+            String scheme = uri.getScheme();
+            if ("file".equals(scheme)) {
+                java.io.File file = new java.io.File(uri.getPath());
+                pfd = android.os.ParcelFileDescriptor.open(file,
+                        android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+            } else {
+                pfd = context.getContentResolver().openFileDescriptor(uri, "r");
+            }
             if (pfd == null) return null;
 
             android.graphics.pdf.PdfRenderer renderer =
@@ -116,9 +142,38 @@ public class ThumbnailGenerator {
             }
 
             android.graphics.pdf.PdfRenderer.Page page = renderer.openPage(0);
-            // Render at 4x for sharp, readable text on high-DPI screens
-            int width  = page.getWidth() * 4;
-            int height = page.getHeight() * 4;
+            int pageW = page.getWidth();
+            int pageH = page.getHeight();
+
+            // Compute a safe render size. Start at 4× zoom for sharp text,
+            // then shrink to fit within both the max-dimension AND max-bytes
+            // caps. For a pathological PDF (e.g. a 200 MB stress-test file
+            // with huge pages declared in points), we'd otherwise allocate
+            // a 128 MB+ bitmap and OOM. This cap keeps us at ~10 MB peak.
+            float scale = 4f;
+            // Dimension cap
+            int largest = Math.max(pageW, pageH);
+            if (largest > 0 && largest * scale > PDF_THUMB_MAX_DIMENSION) {
+                scale = (float) PDF_THUMB_MAX_DIMENSION / largest;
+            }
+            // Byte cap (4 bytes per pixel for ARGB_8888)
+            long bytesAtScale = (long) (pageW * scale) * (long) (pageH * scale) * 4L;
+            if (bytesAtScale > PDF_THUMB_MAX_BYTES) {
+                double ratio = Math.sqrt((double) PDF_THUMB_MAX_BYTES / (double) bytesAtScale);
+                scale = (float) (scale * ratio);
+            }
+            // Floor at 1× — going smaller than original rarely helps and
+            // can produce unreadable text; clamp to min 0.5× just in case.
+            if (scale < 0.5f) scale = 0.5f;
+
+            int width  = Math.max(1, Math.round(pageW * scale));
+            int height = Math.max(1, Math.round(pageH * scale));
+
+            Log.e(Extras.LOG_MESSAGE, "PDF thumb: pageSize=" + pageW + "x" + pageH
+                    + " → renderSize=" + width + "x" + height
+                    + " scale=" + String.format(java.util.Locale.US, "%.2f", scale)
+                    + " bytes≈" + (width * height * 4 / 1024) + " KB");
+
             Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
             // White background (PDF pages are transparent by default)
             bitmap.eraseColor(android.graphics.Color.WHITE);
@@ -128,6 +183,14 @@ public class ThumbnailGenerator {
             pfd.close();
 
             return bitmap;
+        } catch (OutOfMemoryError oom) {
+            // Defensive — we've already capped the bitmap size, but huge
+            // PDFs combined with low-RAM devices can still fail. Don't
+            // crash the app; return null and let the caller show the
+            // generic doc icon instead.
+            Log.e(Extras.LOG_MESSAGE, "PDF thumbnail OOM (page too large): "
+                    + oom.getMessage());
+            return null;
         } catch (Exception e) {
             Log.e(Extras.LOG_MESSAGE, "PDF thumbnail failed: " + e.getMessage());
             return null;

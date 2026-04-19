@@ -38,9 +38,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * Usage:
  *   S3DownloadHelper helper = new S3DownloadHelper(context);
- *   helper.downloadFile(messageId, url, fileName, callback);  // callback runs on main thread
+ *   helper.downloadFile(messageId, url, fileName, targetDir, key, iv, callback);
  *   helper.cancelDownload(messageId);
- *   helper.retryDownload(messageId, url, fileName, callback);
+ *
+ * Retry is handled one level up in MediaTransferManager, which re-invokes
+ * downloadFile with the stored DownloadMetadata after clearing any partial
+ * state — this class only knows how to do a single download transaction.
  */
 public class S3DownloadHelper {
 
@@ -79,20 +82,32 @@ public class S3DownloadHelper {
      * @param targetDirectory   the directory to save the downloaded file in
      * @param callback          callback for progress, success, failure, cancellation (main thread)
      */
+    /**
+     * Downloads a file from S3 and, when b64Key/b64Iv are non-empty, AES-256-GCM
+     * decrypts the downloaded ciphertext bytes before writing to the final
+     * destination. Pass empty strings for b64Key/b64Iv to skip decryption.
+     */
     public void downloadFile(String messageId, String downloadUrl, String fileName,
-                             File targetDirectory, DownloadCallback callback) {
+                             File targetDirectory, String b64Key, String b64Iv,
+                             DownloadCallback callback) {
+        Log.e(Extras.LOG_MESSAGE, "S3DownloadHelper.downloadFile ENTRY for " + messageId
+                + " hasKey=" + (b64Key != null && !b64Key.isEmpty())
+                + " activeTasks=" + activeTasks.size());
         if (activeTasks.containsKey(messageId)) {
             Log.e(Extras.LOG_MESSAGE, "Download already in progress for messageId: " + messageId);
             return;
         }
 
         if (!targetDirectory.exists()) {
-            targetDirectory.mkdirs();
+            boolean mk = targetDirectory.mkdirs();
+            Log.e(Extras.LOG_MESSAGE, "Created target dir " + targetDirectory + " ok=" + mk);
         }
 
-        DownloadTask    downloadTask    =   new DownloadTask(messageId, downloadUrl, fileName, targetDirectory, callback);
+        DownloadTask    downloadTask    =   new DownloadTask(messageId, downloadUrl, fileName,
+                targetDirectory, b64Key, b64Iv, callback);
         activeTasks.put(messageId, downloadTask);
 
+        Log.e(Extras.LOG_MESSAGE, "S3DownloadHelper submitting executeDownload to executor for " + messageId);
         Future<?>       future          =   downloadExecutor.submit(() -> executeDownload(downloadTask));
         downloadTask.setFuture(future);
     }
@@ -115,20 +130,6 @@ public class S3DownloadHelper {
             mainHandler.post(() -> task.getCallback().onCancelled(messageId));
             Log.e(Extras.LOG_MESSAGE, "Download cancelled for messageId: " + messageId);
         }
-    }
-
-    /**
-     * Retries a failed or cancelled download. Cancels any existing task first.
-     */
-    public void retryDownload(String messageId, String downloadUrl, String fileName,
-                              File targetDirectory, DownloadCallback callback) {
-        DownloadTask    existing    =   activeTasks.remove(messageId);
-        if (existing != null) {
-            existing.cancel();
-            File partialFile = new File(existing.getTargetDirectory(), existing.getFileName());
-            if (partialFile.exists()) partialFile.delete();
-        }
-        downloadFile(messageId, downloadUrl, fileName, targetDirectory, callback);
     }
 
     public boolean isDownloading(String messageId) {
@@ -155,10 +156,21 @@ public class S3DownloadHelper {
      * Progress is throttled to PROGRESS_THROTTLE_MS intervals.
      */
     private void executeDownload(DownloadTask task) {
+        Log.e(Extras.LOG_MESSAGE, "executeDownload START for " + task.getMessageId()
+                + " url=" + task.getDownloadUrl());
         HttpURLConnection   connection      =   null;
         InputStream         inputStream     =   null;
         OutputStream        outputStream    =   null;
-        File                targetFile      =   new File(task.getTargetDirectory(), task.getFileName());
+        boolean             needsDecrypt    =   task.getEncryptionKey() != null && !task.getEncryptionKey().isEmpty()
+                                                && task.getEncryptionIv() != null && !task.getEncryptionIv().isEmpty();
+        // When decrypting, write ciphertext to a cache temp file first, then
+        // decrypt-stream into the final destination once download finishes.
+        File                finalFile       =   new File(task.getTargetDirectory(), task.getFileName());
+        File                writeTarget     =   needsDecrypt
+                                                ? new File(context.getCacheDir(),
+                                                        "dl_enc_" + task.getMessageId() + "_"
+                                                            + System.currentTimeMillis() + ".bin")
+                                                : finalFile;
         String              messageId       =   task.getMessageId();
 
         try {
@@ -169,53 +181,137 @@ public class S3DownloadHelper {
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(CONNECT_TIMEOUT);
             connection.setReadTimeout(READ_TIMEOUT);
+            // Publish the connection on the task so cancelDownload (called
+            // from the network-loss callback) can disconnect from another
+            // thread and immediately abort a hung read.
+            task.setConnection(connection);
+            Log.e(Extras.LOG_MESSAGE, "executeDownload connecting to " + task.getDownloadUrl());
             connection.connect();
 
             int statusCode  =   connection.getResponseCode();
+            Log.e(Extras.LOG_MESSAGE, "executeDownload HTTP " + statusCode + " for " + task.getMessageId());
             if (statusCode < 200 || statusCode >= 300) {
-                postFailure(task, "Download failed with status: " + statusCode);
+                // Pull S3 error body for diagnostics (e.g. <Code>AccessDenied</Code>)
+                String errorBody = "";
+                try (InputStream es = connection.getErrorStream()) {
+                    if (es != null) {
+                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                        byte[] eb = new byte[2048];
+                        int en;
+                        while ((en = es.read(eb)) != -1) bos.write(eb, 0, en);
+                        errorBody = bos.toString("UTF-8");
+                    }
+                } catch (Exception ignored) {}
+                Log.e(Extras.LOG_MESSAGE, "executeDownload S3 error body: " + errorBody);
+                postFailure(task, "Download failed with status: " + statusCode
+                        + (errorBody.isEmpty() ? "" : " — " + errorBody));
                 return;
             }
 
-            long    contentLength           =   connection.getContentLength();
+            long    contentLength           =   connection.getContentLengthLong();
+            Log.e(Extras.LOG_MESSAGE, "executeDownload contentLength=" + contentLength
+                    + " for " + messageId);
             inputStream                     =   connection.getInputStream();
-            outputStream                    =   new FileOutputStream(targetFile);
+            outputStream                    =   new FileOutputStream(writeTarget);
 
             byte[]  buffer                  =   new byte[CHUNK_SIZE];
             long    totalRead               =   0;
             int     bytesRead;
             int     lastReportedProgress    =   -1;
             long    lastProgressPostTime    =   0;
+            long    lastBytesLogPoint       =   0;            // log every ~5MB of progress
             AtomicBoolean cancelled         =   task.getCancelFlag();
 
             while ((bytesRead = inputStream.read(buffer)) != -1) {
                 if (cancelled.get()) {
                     Log.e(Extras.LOG_MESSAGE, "Download cancelled during transfer for messageId: " + messageId);
+                    // writeTarget cleanup happens in finally
                     return;
                 }
 
                 outputStream.write(buffer, 0, bytesRead);
                 totalRead   +=  bytesRead;
 
-                // Throttled progress reporting
+                // Unconditional bytes-flowing log every ~5 MB so we can see if
+                // the read loop is actually progressing vs hung. Useful when
+                // contentLength is -1 (chunked transfer) and the throttled
+                // percent log below stays silent.
+                if (totalRead - lastBytesLogPoint >= 5L * 1024 * 1024) {
+                    lastBytesLogPoint = totalRead;
+                    Log.e(Extras.LOG_MESSAGE, "executeDownload progress: "
+                            + (totalRead / (1024 * 1024)) + " MB read for " + messageId);
+                }
+
+                // Throttled progress reporting — drives the UI progress bar.
+                // Falls back to "indeterminate" updates (progress 0) when the
+                // server didn't send a Content-Length so the spinner still
+                // animates instead of looking frozen.
+                long    now         =   System.currentTimeMillis();
                 if (contentLength > 0) {
                     int     progress    =   (int) (totalRead * 100 / contentLength);
-                    long    now         =   System.currentTimeMillis();
-
                     if (progress != lastReportedProgress && (now - lastProgressPostTime >= PROGRESS_THROTTLE_MS)) {
                         lastReportedProgress    =   progress;
                         lastProgressPostTime    =   now;
                         int finalProgress       =   progress;
                         mainHandler.post(() -> task.getCallback().onProgress(messageId, finalProgress));
                     }
+                } else if (now - lastProgressPostTime >= PROGRESS_THROTTLE_MS) {
+                    lastProgressPostTime = now;
+                    mainHandler.post(() -> task.getCallback().onProgress(messageId, 0));
                 }
             }
+            Log.e(Extras.LOG_MESSAGE, "executeDownload read-loop EXIT totalRead=" + totalRead
+                    + " for " + messageId);
 
             outputStream.flush();
+            try { outputStream.close(); } catch (Exception ignored) {}
+            outputStream = null;
 
             if (task.isCancelled()) {
-                if (targetFile.exists()) targetFile.delete();
+                if (writeTarget.exists()) writeTarget.delete();
                 return;
+            }
+
+            // Decrypt cache temp → final destination, then delete cipher temp.
+            //
+            // IMPORTANT: Android's CipherInputStream(AES/GCM) buffers the
+            // ENTIRE ciphertext in memory before releasing any plaintext —
+            // GCM auth-tag verification requires the full input. For a 50 MB
+            // file this allocates ~150 MB of Large Object Space and thrashes
+            // GC; for bigger files it'll OOM. The proper fix is chunked
+            // encryption (per SOW M2 spec). For now we catch BOTH Exception
+            // and OutOfMemoryError so a failure surfaces as a retry icon
+            // instead of silently killing the executor thread (which leaves
+            // the row stuck on the spinner forever).
+            if (needsDecrypt) {
+                Log.e(Extras.LOG_MESSAGE, "Decrypt START for " + messageId
+                        + " ciphertext=" + writeTarget.length() + " bytes");
+                long decStart = System.currentTimeMillis();
+                try (InputStream cin = new java.io.FileInputStream(writeTarget);
+                     OutputStream pout = new FileOutputStream(finalFile)) {
+                    com.jippytalk.Encryption.MessageCryptoHelper.decryptStream(
+                            cin, pout, task.getEncryptionKey(), task.getEncryptionIv());
+                } catch (OutOfMemoryError oom) {
+                    Log.e(Extras.LOG_MESSAGE, "Decrypt OOM for " + messageId
+                            + " — file too large for in-memory GCM decrypt: "
+                            + oom.getMessage());
+                    if (finalFile.exists()) finalFile.delete();
+                    if (writeTarget.exists()) writeTarget.delete();
+                    postFailure(task, "File too large to decrypt on this device "
+                            + "(needs chunked encryption — SOW M2 work)");
+                    return;
+                } catch (Exception decryptErr) {
+                    Log.e(Extras.LOG_MESSAGE, "Decrypt failed for " + messageId
+                            + ": " + decryptErr.getMessage());
+                    if (finalFile.exists()) finalFile.delete();
+                    if (writeTarget.exists()) writeTarget.delete();
+                    postFailure(task, "Decrypt failed: " + decryptErr.getMessage());
+                    return;
+                }
+                Log.e(Extras.LOG_MESSAGE, "Decrypt DONE for " + messageId
+                        + " plaintext=" + finalFile.length() + " bytes elapsed="
+                        + (System.currentTimeMillis() - decStart) + " ms");
+                if (writeTarget.exists()) writeTarget.delete();
             }
 
             // Always post final 100%
@@ -223,15 +319,21 @@ public class S3DownloadHelper {
                 mainHandler.post(() -> task.getCallback().onProgress(messageId, 100));
             }
 
-            Log.e(Extras.LOG_MESSAGE, "Download completed: " + targetFile.getAbsolutePath());
-            String  localPath   =   targetFile.getAbsolutePath();
+            Log.e(Extras.LOG_MESSAGE, "Download completed: " + finalFile.getAbsolutePath());
+            String  localPath   =   finalFile.getAbsolutePath();
             mainHandler.post(() -> task.getCallback().onSuccess(messageId, localPath));
 
-        } catch (Exception e) {
-            Log.e(Extras.LOG_MESSAGE, "Download failed for messageId " + messageId + ": " + e.getMessage());
-            if (targetFile.exists()) targetFile.delete();
+        } catch (Throwable e) {
+            // Catching Throwable (not just Exception) so OOM and other Errors
+            // surface as a retry icon instead of silently killing the
+            // executor thread.
+            Log.e(Extras.LOG_MESSAGE, "Download failed for messageId " + messageId
+                    + " (" + e.getClass().getSimpleName() + "): " + e.getMessage());
+            if (writeTarget.exists()) writeTarget.delete();
+            if (needsDecrypt && finalFile.exists()) finalFile.delete();
             if (!task.isCancelled()) {
-                postFailure(task, "Download error: " + e.getMessage());
+                postFailure(task, "Download error (" + e.getClass().getSimpleName()
+                        + "): " + e.getMessage());
             }
         } finally {
             try {
@@ -239,6 +341,12 @@ public class S3DownloadHelper {
                 if (outputStream != null)   outputStream.close();
             } catch (Exception ignored) {}
             if (connection != null)         connection.disconnect();
+            // Clean up the cipher temp file in the cache. On the success path we
+            // already deleted it after decryption; this is a safety net for the
+            // cancel-mid-stream and exception paths.
+            if (needsDecrypt && writeTarget != finalFile && writeTarget.exists()) {
+                try { writeTarget.delete(); } catch (Exception ignored) {}
+            }
             activeTasks.remove(messageId);
         }
     }
@@ -259,16 +367,26 @@ public class S3DownloadHelper {
         private final String                downloadUrl;
         private final String                fileName;
         private final File                  targetDirectory;
+        private final String                encryptionKey;
+        private final String                encryptionIv;
         private final DownloadCallback      callback;
         private final AtomicBoolean         cancelFlag;
         private Future<?>                   future;
+        // Live connection ref so cancel can disconnect from another thread
+        // and unblock the executor thread's blocked inputStream.read(),
+        // which otherwise sits for up to READ_TIMEOUT (60s) when the
+        // network drops mid-download.
+        private volatile HttpURLConnection  connection;
 
         public DownloadTask(String messageId, String downloadUrl, String fileName,
-                            File targetDirectory, DownloadCallback callback) {
+                            File targetDirectory, String encryptionKey, String encryptionIv,
+                            DownloadCallback callback) {
             this.messageId          =   messageId;
             this.downloadUrl        =   downloadUrl;
             this.fileName           =   fileName;
             this.targetDirectory    =   targetDirectory;
+            this.encryptionKey      =   encryptionKey;
+            this.encryptionIv       =   encryptionIv;
             this.callback           =   callback;
             this.cancelFlag         =   new AtomicBoolean(false);
         }
@@ -277,12 +395,24 @@ public class S3DownloadHelper {
         public String getDownloadUrl()         { return downloadUrl; }
         public String getFileName()            { return fileName; }
         public File getTargetDirectory()       { return targetDirectory; }
+        public String getEncryptionKey()       { return encryptionKey; }
+        public String getEncryptionIv()        { return encryptionIv; }
         public DownloadCallback getCallback()  { return callback; }
         public AtomicBoolean getCancelFlag()   { return cancelFlag; }
         public boolean isCancelled()           { return cancelFlag.get(); }
 
+        public void setConnection(HttpURLConnection c) { this.connection = c; }
+
         public void cancel() {
             cancelFlag.set(true);
+            // Force the in-flight HTTP read to throw IOException by
+            // disconnecting from another thread. Without this the
+            // executor thread sits blocked in inputStream.read() for
+            // the full 60s socket timeout after the network drops.
+            HttpURLConnection c = connection;
+            if (c != null) {
+                try { c.disconnect(); } catch (Throwable ignored) {}
+            }
             if (future != null && !future.isDone()) {
                 future.cancel(true);
             }

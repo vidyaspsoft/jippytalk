@@ -65,6 +65,11 @@ public class MediaTransferManager {
 
     // ---- Constructor ----
 
+    // Live monitor that cancels active transfers the instant the network
+    // drops, so the UI flips to the retry icon immediately instead of
+    // sitting on the spinner for the 60s socket timeout.
+    private android.net.ConnectivityManager.NetworkCallback networkCallback;
+
     public MediaTransferManager(Context context) {
         this.context            =   context.getApplicationContext();
         this.mediaStorageHelper =   MediaStorageHelper.getInstance(context);
@@ -73,6 +78,44 @@ public class MediaTransferManager {
         this.fileCopyExecutor   =   Executors.newSingleThreadExecutor();
         this.pendingUploads     =   new ConcurrentHashMap<>();
         this.pendingDownloads   =   new ConcurrentHashMap<>();
+        registerNetworkLossWatcher();
+    }
+
+    /**
+     * Registers a default-network callback that cancels all active downloads
+     * (and per-message uploads via the worker's isStopped() loop) the moment
+     * the network drops. This converts a multi-second hang on the spinner
+     * into an immediate "retry" state for the user.
+     */
+    private void registerNetworkLossWatcher() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+            networkCallback = new android.net.ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onLost(@androidx.annotation.NonNull android.net.Network network) {
+                    Log.e(Extras.LOG_MESSAGE,
+                            "MediaTransferManager: network LOST — cancelling active transfers");
+                    try { s3DownloadHelper.cancelAll(); } catch (Throwable ignored) {}
+                    // Mark all pending downloads as failed so the adapter
+                    // pill flips to retry. We can't enumerate active uploads
+                    // from here (they live inside the worker), but the
+                    // worker's S3 PUT will throw IOException when the
+                    // connection is dropped, which already routes through
+                    // the existing failure path.
+                    if (adapter != null) {
+                        for (String mid : pendingDownloads.keySet()) {
+                            adapter.markTransferFailed(mid);
+                        }
+                    }
+                }
+            };
+            cm.registerDefaultNetworkCallback(networkCallback);
+        } catch (Throwable t) {
+            Log.e(Extras.LOG_MESSAGE,
+                    "registerNetworkLossWatcher failed: " + t.getMessage());
+        }
     }
 
     // -------------------- Setup Starts Here ---------------------
@@ -108,6 +151,13 @@ public class MediaTransferManager {
      * @param messageId         the unique message ID for this attachment
      * @param attachmentModel   the attachment model from the picker
      */
+    // Upload size cap. Beyond this, AES-GCM streaming encryption on Android
+    // becomes unreliable (javax.crypto.CipherOutputStream can hold ciphertext
+    // buffers approaching the Android heap limit of ~256 MB). Picking the
+    // same threshold Signal ships with. Tweak if you switch to chunked
+    // encryption later and can support larger files safely.
+    public static final long MAX_UPLOAD_SIZE_BYTES = 100L * 1024 * 1024;   // 100 MB
+
     public void sendAttachment(String messageId, AttachmentModel attachmentModel) {
         pendingUploads.put(messageId, attachmentModel);
 
@@ -131,6 +181,20 @@ public class MediaTransferManager {
                     extension = attachmentModel.getContentSubtype();
                 }
                 Uri     sourceUri       =   Uri.parse(attachmentModel.getMedia());
+
+                // Hard size cap check BEFORE we copy the file to sent/ —
+                // saves disk space and gives the user immediate feedback.
+                long picked = queryUriSize(sourceUri);
+                if (picked > MAX_UPLOAD_SIZE_BYTES) {
+                    Log.e(Extras.LOG_MESSAGE, "Upload rejected — file size "
+                            + (picked / 1024 / 1024) + " MB exceeds cap "
+                            + (MAX_UPLOAD_SIZE_BYTES / 1024 / 1024) + " MB");
+                    postTransferFailed(messageId,
+                            "File too large: " + (picked / 1024 / 1024)
+                            + " MB. Max supported upload is "
+                            + (MAX_UPLOAD_SIZE_BYTES / 1024 / 1024) + " MB.");
+                    return;
+                }
 
                 String  localPath       =   mediaStorageHelper.copyToSentFolder(sourceUri, contentType, extension, originalName);
 
@@ -175,6 +239,12 @@ public class MediaTransferManager {
             public void onProgress(String msgId, int percentage) {
                 if (adapter != null) {
                     adapter.updateTransferProgress(msgId, percentage, MessageAdapter.TRANSFER_IN_PROGRESS);
+                }
+                // Also fan out to the listener so the WorkManager-backed
+                // worker (which has adapter==null) can forward progress to
+                // the UI via WorkInfo.Progress.
+                if (transferEventListener != null) {
+                    transferEventListener.onUploadProgress(msgId, percentage);
                 }
             }
 
@@ -231,12 +301,43 @@ public class MediaTransferManager {
      * @param contentType       "image", "video", "audio", or "document"
      * @param fileTransferId    the server's file transfer ID (for file_downloaded event)
      */
+    /**
+     * Downloads a file from S3 and, if key+iv are supplied, AES-256-GCM
+     * decrypts the ciphertext bytes using the per-message key from the WS
+     * payload's `encryption_key` / `encryption_iv` fields. Pass empty
+     * strings for key+iv to skip decryption (legacy plaintext).
+     */
     public void downloadAttachment(String messageId, String downloadUrl, String fileName,
-                                   String contentType, String fileTransferId) {
+                                   String contentType, String fileTransferId,
+                                   String b64Key, String b64Iv) {
+
+        Log.e(Extras.LOG_MESSAGE, "downloadAttachment ENTRY for " + messageId
+                + " fileName=" + fileName + " contentType=" + contentType);
+
+        // Persist metadata BEFORE the network check so retryDownload can find
+        // it after a network-off failure (otherwise the user taps retry and
+        // we have nothing to re-execute).
+        pendingDownloads.put(messageId, new DownloadMetadata(downloadUrl, fileName, contentType,
+                fileTransferId, b64Key, b64Iv));
+
+        // Pre-flight network check — fail fast with a clear retry icon
+        // instead of letting HttpURLConnection block for 60s of socket
+        // timeout when the device is offline.
+        if (!isNetworkAvailable()) {
+            Log.e(Extras.LOG_MESSAGE, "downloadAttachment: NO NETWORK — marking "
+                    + messageId + " as FAILED");
+            if (adapter != null) {
+                adapter.markTransferFailed(messageId);
+            }
+            return;
+        }
 
         // Check if already downloaded
         File    targetDir   =   mediaStorageHelper.getReceivedFolder(contentType);
         File    targetFile  =   new File(targetDir, fileName);
+        Log.e(Extras.LOG_MESSAGE, "downloadAttachment targetDir=" + targetDir
+                + " exists=" + targetDir.exists()
+                + " targetFile=" + targetFile + " alreadyExists=" + targetFile.exists());
         if (targetFile.exists()) {
             Log.e(Extras.LOG_MESSAGE, "File already downloaded: " + targetFile.getAbsolutePath());
             if (adapter != null) {
@@ -248,14 +349,14 @@ public class MediaTransferManager {
             return;
         }
 
-        // Store metadata for retry
-        pendingDownloads.put(messageId, new DownloadMetadata(downloadUrl, fileName, contentType, fileTransferId));
+        // (Metadata for retry was stored above, before the network check.)
 
         if (adapter != null) {
             adapter.updateTransferProgress(messageId, 0, MessageAdapter.TRANSFER_IN_PROGRESS);
         }
 
-        s3DownloadHelper.downloadFile(messageId, downloadUrl, fileName, targetDir,
+        Log.e(Extras.LOG_MESSAGE, "downloadAttachment handing off to S3DownloadHelper for " + messageId);
+        s3DownloadHelper.downloadFile(messageId, downloadUrl, fileName, targetDir, b64Key, b64Iv,
                 new S3DownloadHelper.DownloadCallback() {
             @Override
             public void onProgress(String msgId, int percentage) {
@@ -361,7 +462,8 @@ public class MediaTransferManager {
         DownloadMetadata    metadata    =   pendingDownloads.get(messageId);
         if (metadata != null) {
             downloadAttachment(messageId, metadata.downloadUrl, metadata.fileName,
-                    metadata.contentType, metadata.fileTransferId);
+                    metadata.contentType, metadata.fileTransferId,
+                    metadata.encryptionKey, metadata.encryptionIv);
         } else {
             Log.e(Extras.LOG_MESSAGE, "Cannot retry download — no pending metadata for: " + messageId);
         }
@@ -385,6 +487,40 @@ public class MediaTransferManager {
                 transferEventListener.onUploadFailed(messageId, error);
             }
         }, 500);
+    }
+
+    // -------------------- Size probe helper ---------------------
+
+    /**
+     * Returns the size of the file pointed at by a content:// or file:// URI.
+     * Used for the pre-upload size cap check. Returns -1 if size cannot be
+     * determined (in which case we allow the upload to proceed — the
+     * S3UploadHelper will catch actual IO failures).
+     */
+    private long queryUriSize(Uri uri) {
+        if (uri == null) return -1L;
+        String scheme = uri.getScheme();
+        if ("file".equals(scheme)) {
+            try {
+                String path = uri.getPath();
+                if (path != null) {
+                    java.io.File f = new java.io.File(path);
+                    if (f.exists()) return f.length();
+                }
+            } catch (Exception ignored) {}
+            return -1L;
+        }
+        // content:// — ask ContentResolver
+        try (android.database.Cursor c = context.getContentResolver()
+                .query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE);
+                if (idx >= 0 && !c.isNull(idx)) {
+                    return c.getLong(idx);
+                }
+            }
+        } catch (Exception ignored) {}
+        return -1L;
     }
 
     // -------------------- Network Check Starts Here ---------------------
@@ -416,6 +552,17 @@ public class MediaTransferManager {
         s3DownloadHelper.cancelAll();
         pendingUploads.clear();
         pendingDownloads.clear();
+        // Drop the network-loss watcher so we don't leak the callback when
+        // the activity is destroyed (otherwise ConnectivityManager keeps a
+        // strong ref and we leak this MediaTransferManager + the activity).
+        if (networkCallback != null) {
+            try {
+                android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                        context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+                if (cm != null) cm.unregisterNetworkCallback(networkCallback);
+            } catch (Throwable ignored) {}
+            networkCallback = null;
+        }
     }
 
     // ---- Getters ----
@@ -435,12 +582,17 @@ public class MediaTransferManager {
         final String    fileName;
         final String    contentType;
         final String    fileTransferId;
+        final String    encryptionKey;
+        final String    encryptionIv;
 
-        DownloadMetadata(String downloadUrl, String fileName, String contentType, String fileTransferId) {
+        DownloadMetadata(String downloadUrl, String fileName, String contentType,
+                         String fileTransferId, String encryptionKey, String encryptionIv) {
             this.downloadUrl        =   downloadUrl;
             this.fileName           =   fileName;
             this.contentType        =   contentType;
             this.fileTransferId     =   fileTransferId;
+            this.encryptionKey      =   encryptionKey != null ? encryptionKey : "";
+            this.encryptionIv       =   encryptionIv != null ? encryptionIv : "";
         }
     }
 
@@ -483,5 +635,17 @@ public class MediaTransferManager {
          * @param error     the error description
          */
         default void onUploadFailed(String messageId, String error) {}
+
+        /**
+         * Called periodically during the S3 PUT with the upload progress
+         * percentage. Default no-op so existing listeners don't break.
+         * The MediaUploadWorker uses this to forward progress to WorkManager
+         * (via setProgressAsync) so the activity's WorkInfo observer can
+         * drive the progress bar even though the worker has no adapter.
+         *
+         * @param messageId the message ID being uploaded
+         * @param percent   0..100
+         */
+        default void onUploadProgress(String messageId, int percent) {}
     }
 }

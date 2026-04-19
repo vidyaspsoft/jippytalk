@@ -14,7 +14,7 @@ public class API {
     // presigned URLs that the app uploads to directly. The bucket/region are kept here
     // as defaults in case the presign API response doesn't include them.
 
-    public static final String  S3_BUCKET           =   "bank-ster-dev";
+    public static final String  S3_BUCKET           =   "mariox-s3";
     public static final String  S3_REGION           =   "ap-south-1";
 
     // ---- Auth ----

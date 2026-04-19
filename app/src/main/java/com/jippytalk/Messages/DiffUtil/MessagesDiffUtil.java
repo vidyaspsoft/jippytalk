@@ -28,6 +28,16 @@ public class MessagesDiffUtil extends DiffUtil.ItemCallback<MessageModal> {
                 && TextUtils.equals(oldItem.getReplyToMessageId(), newItem.getReplyToMessageId())
                 && TextUtils.equals(oldItem.getMediaUri(), newItem.getMediaUri())
                 && oldItem.getMediaDuration() == newItem.getMediaDuration()
-                && TextUtils.equals(oldItem.getFileName(), newItem.getFileName());
+                && TextUtils.equals(oldItem.getFileName(), newItem.getFileName())
+                // Media fields that change asynchronously after insertion (thumbnail
+                // generation, S3 upload, receiver-side decrypt). Without these, the
+                // adapter skips rebinds and the thumbnail / download icons never
+                // refresh after the row first appears.
+                && TextUtils.equals(oldItem.getThumbnailUri(), newItem.getThumbnailUri())
+                && TextUtils.equals(oldItem.getRemoteThumbnailUrl(), newItem.getRemoteThumbnailUrl())
+                && TextUtils.equals(oldItem.getEncryptedS3Url(), newItem.getEncryptedS3Url())
+                && TextUtils.equals(oldItem.getS3Key(), newItem.getS3Key())
+                && TextUtils.equals(oldItem.getCaption(), newItem.getCaption())
+                && oldItem.getFileSize() == newItem.getFileSize();
     }
 }

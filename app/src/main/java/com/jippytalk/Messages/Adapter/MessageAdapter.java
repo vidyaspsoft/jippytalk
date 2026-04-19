@@ -200,12 +200,21 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                         needsRetry ? VISIBLE : GONE);
             } else if (holder instanceof SentMediaViewHolder sentMediaHolder) {
                 setStatusIcon(status, sentMediaHolder.sentMediaBinding.ivSeenImage);
-                // Hide document pill retry + spinner once synced
                 boolean synced = status != MessagesManager.MESSAGE_NOT_SYNCED_WITH_SERVER
                         && status != MessagesManager.MESSAGE_SEND_FAILED;
                 if (synced) {
                     sentMediaHolder.sentMediaBinding.ivPillRetry.setVisibility(GONE);
-                    sentMediaHolder.sentMediaBinding.pbPillUpload.setVisibility(GONE);
+                    sentMediaHolder.sentMediaBinding.flPillUploadProgress.setVisibility(GONE);
+                    // Re-wire click listener now that status allows opening
+                    String mediaUri = messageModal.getMediaUri();
+                    String msgId    = messageModal.getMessageId();
+                    if (mediaUri != null && mediaUri.startsWith("/")) {
+                        sentMediaHolder.sentMediaBinding.llSentMediaMessage.setOnClickListener(v -> {
+                            if (mediaTransferClickListener != null) {
+                                mediaTransferClickListener.onOpenFile(msgId, mediaUri);
+                            }
+                        });
+                    }
                 }
             } else if (holder instanceof SentVideoViewHolder sentVideoHolder) {
                 setStatusIcon(status, sentVideoHolder.sentVideoBinding.ivSeenImage);
@@ -220,12 +229,78 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
             if (state != null) {
                 if (holder instanceof SentMediaViewHolder sentMediaHolder) {
                     bindSentMediaTransferState(sentMediaHolder.sentMediaBinding, messageId, state);
+                    // Sent documents use the inline pill (ivPillRetry /
+                    // pbPillUpload), not the big-preview overlay. Update the
+                    // pill state + drive the determinate bar's fill from the
+                    // live progress percentage so the user sees upload
+                    // progress like 0%→100% on the bar.
+                    int sentMsgType = messageModal.getMessageType();
+                    if (sentMsgType == MessagesManager.DOCUMENT_MESSAGE) {
+                        com.jippytalk.databinding.SentMediaMessageBinding sb =
+                                sentMediaHolder.sentMediaBinding;
+                        switch (state.getState()) {
+                            case TRANSFER_IN_PROGRESS -> {
+                                sb.ivPillRetry.setVisibility(GONE);
+                                sb.flPillUploadProgress.setVisibility(VISIBLE);
+                                int sentPct = state.getProgress();
+                                sb.pbPillUpload.setProgressCompat(sentPct, true);
+                                sb.tvPillUploadProgress.setText(sentPct + "%");
+                            }
+                            case TRANSFER_FAILED -> {
+                                sb.flPillUploadProgress.setVisibility(GONE);
+                                sb.ivPillRetry.setVisibility(VISIBLE);
+                                sb.ivPillRetry.setOnClickListener(v -> {
+                                    if (mediaTransferClickListener != null) {
+                                        mediaTransferClickListener.onRetryUpload(messageId);
+                                    }
+                                });
+                            }
+                            case TRANSFER_COMPLETED, TRANSFER_IDLE -> {
+                                sb.flPillUploadProgress.setVisibility(GONE);
+                                sb.ivPillRetry.setVisibility(GONE);
+                            }
+                        }
+                    }
                 } else if (holder instanceof SentVideoViewHolder sentVideoHolder) {
                     bindSentVideoTransferState(sentVideoHolder.sentVideoBinding, messageId, state);
                 } else if (holder instanceof SentAudioViewHolder sentAudioHolder) {
                     bindSentAudioTransferState(sentAudioHolder.sentAudioBinding, messageId, state);
                 } else if (holder instanceof ReceivedMediaViewHolder receivedMediaHolder) {
                     bindReceivedMediaTransferState(receivedMediaHolder.receivedMediaBinding, messageId, state);
+                    // Document rows show an inline pill (ivPillDownload /
+                    // pbPillDownload), NOT the big-preview overlay stack, so
+                    // the helper above (which only handles image/video
+                    // overlays) leaves the pill stuck on its pre-completion
+                    // state. Update the pill explicitly here. The open-tap
+                    // handler is wired later by the full bind triggered from
+                    // the LiveData refresh that follows persistLocalFilePathOnRow.
+                    int msgType = messageModal.getMessageType();
+                    if (msgType == MessagesManager.DOCUMENT_MESSAGE) {
+                        com.jippytalk.databinding.ReceivedMediaMessageBinding rb =
+                                receivedMediaHolder.receivedMediaBinding;
+                        switch (state.getState()) {
+                            case TRANSFER_IN_PROGRESS -> {
+                                rb.ivPillDownload.setVisibility(GONE);
+                                rb.flPillDownloadProgress.setVisibility(VISIBLE);
+                                int recvPct = state.getProgress();
+                                rb.pbPillDownload.setProgressCompat(recvPct, true);
+                                rb.tvPillDownloadProgress.setText(recvPct + "%");
+                            }
+                            case TRANSFER_FAILED -> {
+                                rb.flPillDownloadProgress.setVisibility(GONE);
+                                rb.ivPillDownload.setVisibility(VISIBLE);
+                                rb.ivPillDownload.setOnClickListener(v -> {
+                                    if (mediaTransferClickListener != null) {
+                                        mediaTransferClickListener.onRetryDownload(messageId);
+                                    }
+                                });
+                            }
+                            case TRANSFER_COMPLETED, TRANSFER_IDLE -> {
+                                rb.flPillDownloadProgress.setVisibility(GONE);
+                                rb.ivPillDownload.setVisibility(GONE);
+                            }
+                        }
+                    }
                 } else if (holder instanceof ReceivedVideoViewHolder receivedVideoHolder) {
                     bindReceivedVideoTransferState(receivedVideoHolder.receivedVideoBinding, messageId, state);
                 } else if (holder instanceof ReceivedAudioViewHolder receivedAudioHolder) {
@@ -601,7 +676,7 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                         buildDocSubtitle(messageModal.getContentSubtype(), messageModal.getFileSize(), mediaUri, hasLocalFile));
                 sentMediaBinding.tvFileName.setVisibility(GONE);
 
-                // Show thumbnail preview if available (e.g. PDF first page)
+                // Show thumbnail if available (pre-generated, no main-thread work)
                 String thumbUri = messageModal.getThumbnailUri();
                 if (thumbUri != null && !thumbUri.isEmpty()) {
                     sentMediaBinding.ivDocThumbnail.setVisibility(VISIBLE);
@@ -609,19 +684,6 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                             .load(thumbUri.startsWith("/") ? new java.io.File(thumbUri) : thumbUri)
                             .centerCrop()
                             .into(sentMediaBinding.ivDocThumbnail);
-                } else if (hasLocalFile && mediaUri != null) {
-                    // Try to generate thumbnail on-the-fly for PDFs
-                    java.io.File thumbFile = com.jippytalk.Messages.Attachment.ThumbnailGenerator
-                            .generateThumbnail(context, android.net.Uri.fromFile(new java.io.File(mediaUri)), "document");
-                    if (thumbFile != null && thumbFile.exists()) {
-                        sentMediaBinding.ivDocThumbnail.setVisibility(VISIBLE);
-                        com.bumptech.glide.Glide.with(context)
-                                .load(thumbFile)
-                                .centerCrop()
-                                .into(sentMediaBinding.ivDocThumbnail);
-                    } else {
-                        sentMediaBinding.ivDocThumbnail.setVisibility(GONE);
-                    }
                 } else {
                     sentMediaBinding.ivDocThumbnail.setVisibility(GONE);
                 }
@@ -665,16 +727,19 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                 sentMediaBinding.flRetryOverlay.setVisibility(GONE);
 
                 if (transferState != null
-                        && (transferState.getState() == TRANSFER_IN_PROGRESS
-                            || transferState.getState() == TRANSFER_COMPLETED)) {
-                    // Active upload or just completed (waiting for delivery_status) → spinner
-                    sentMediaBinding.pbPillUpload.setVisibility(
-                            transferState.getState() == TRANSFER_IN_PROGRESS ? VISIBLE : GONE);
+                        && transferState.getState() == TRANSFER_IN_PROGRESS) {
+                    // Active upload → ring + percent. Drive both from the
+                    // current TransferState progress so a fresh re-bind
+                    // (e.g. on scroll) doesn't reset the ring to 0.
+                    sentMediaBinding.flPillUploadProgress.setVisibility(VISIBLE);
+                    int sentPct = transferState.getProgress();
+                    sentMediaBinding.pbPillUpload.setProgressCompat(sentPct, true);
+                    sentMediaBinding.tvPillUploadProgress.setText(sentPct + "%");
                     sentMediaBinding.ivPillRetry.setVisibility(GONE);
                 } else if (messageStatus == MessagesManager.MESSAGE_SEND_FAILED
                         || (transferState != null && transferState.getState() == TRANSFER_FAILED)) {
                     // Explicit failure → show retry
-                    sentMediaBinding.pbPillUpload.setVisibility(GONE);
+                    sentMediaBinding.flPillUploadProgress.setVisibility(GONE);
                     sentMediaBinding.ivPillRetry.setVisibility(VISIBLE);
                     sentMediaBinding.ivPillRetry.setOnClickListener(v -> {
                         if (mediaTransferClickListener != null) {
@@ -685,7 +750,7 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                         && transferState == null) {
                     // Stuck at NOT_SYNCED with NO transfer state at all (app was restarted,
                     // no in-memory record of this upload) → show retry
-                    sentMediaBinding.pbPillUpload.setVisibility(GONE);
+                    sentMediaBinding.flPillUploadProgress.setVisibility(GONE);
                     sentMediaBinding.ivPillRetry.setVisibility(VISIBLE);
                     sentMediaBinding.ivPillRetry.setOnClickListener(v -> {
                         if (mediaTransferClickListener != null) {
@@ -694,7 +759,7 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                     });
                 } else {
                     // Synced/delivered/seen → hide both
-                    sentMediaBinding.pbPillUpload.setVisibility(GONE);
+                    sentMediaBinding.flPillUploadProgress.setVisibility(GONE);
                     sentMediaBinding.ivPillRetry.setVisibility(GONE);
                 }
             } else if (transferState != null) {
@@ -769,18 +834,6 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                             .load(thumbUri.startsWith("/") ? new java.io.File(thumbUri) : thumbUri)
                             .centerCrop()
                             .into(receivedMediaBinding.ivDocThumbnail);
-                } else if (isDownloaded && mediaUri != null) {
-                    java.io.File thumbFile = com.jippytalk.Messages.Attachment.ThumbnailGenerator
-                            .generateThumbnail(context, android.net.Uri.fromFile(new java.io.File(mediaUri)), "document");
-                    if (thumbFile != null && thumbFile.exists()) {
-                        receivedMediaBinding.ivDocThumbnail.setVisibility(VISIBLE);
-                        com.bumptech.glide.Glide.with(context)
-                                .load(thumbFile)
-                                .centerCrop()
-                                .into(receivedMediaBinding.ivDocThumbnail);
-                    } else {
-                        receivedMediaBinding.ivDocThumbnail.setVisibility(GONE);
-                    }
                 } else {
                     receivedMediaBinding.ivDocThumbnail.setVisibility(GONE);
                 }
@@ -826,10 +879,13 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                 if (transferState != null
                         && transferState.getState() == TRANSFER_IN_PROGRESS) {
                     receivedMediaBinding.ivPillDownload.setVisibility(GONE);
-                    receivedMediaBinding.pbPillDownload.setVisibility(VISIBLE);
+                    receivedMediaBinding.flPillDownloadProgress.setVisibility(VISIBLE);
+                    int recvPct = transferState.getProgress();
+                    receivedMediaBinding.pbPillDownload.setProgressCompat(recvPct, true);
+                    receivedMediaBinding.tvPillDownloadProgress.setText(recvPct + "%");
                 } else if (!isDownloaded) {
                     receivedMediaBinding.ivPillDownload.setVisibility(VISIBLE);
-                    receivedMediaBinding.pbPillDownload.setVisibility(GONE);
+                    receivedMediaBinding.flPillDownloadProgress.setVisibility(GONE);
                     receivedMediaBinding.ivPillDownload.setOnClickListener(v -> {
                         if (mediaTransferClickListener != null) {
                             mediaTransferClickListener.onDownload(messageId);
@@ -837,7 +893,7 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
                     });
                 } else {
                     receivedMediaBinding.ivPillDownload.setVisibility(GONE);
-                    receivedMediaBinding.pbPillDownload.setVisibility(GONE);
+                    receivedMediaBinding.flPillDownloadProgress.setVisibility(GONE);
                 }
             } else if (transferState != null) {
                 bindReceivedMediaTransferState(receivedMediaBinding, messageId, transferState);
@@ -1125,12 +1181,9 @@ public class MessageAdapter extends ListAdapter<MessageModal, RecyclerView.ViewH
         String  typeLabel = contentSubtype != null && !contentSubtype.isEmpty()
                 ? contentSubtype.toUpperCase(java.util.Locale.US) : "";
         String  sizeLabel = "";
-        // Prefer the stored fileSize from metadata; fall back to local file if available
+        // Use stored fileSize only — no File I/O on main thread
         if (fileSize > 0) {
             sizeLabel = formatByteSize(fileSize);
-        } else if (hasLocalFile && mediaUri != null) {
-            long bytes = new java.io.File(mediaUri).length();
-            if (bytes > 0) sizeLabel = formatByteSize(bytes);
         }
         if (!sizeLabel.isEmpty() && !typeLabel.isEmpty()) return sizeLabel + " · " + typeLabel;
         if (!typeLabel.isEmpty())                         return typeLabel;

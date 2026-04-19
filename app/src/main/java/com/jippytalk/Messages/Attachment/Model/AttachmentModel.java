@@ -29,6 +29,12 @@ public class AttachmentModel {
     private String      s3Key;
     private String      fileTransferId;
     private String      localFilePath;
+    // Per-message AES-256-GCM key + IV (Base64). Generated once when the
+    // attachment is picked and reused for: file bytes, thumbnail bytes,
+    // caption text, S3 URL, and thumbnail URL. Receiver uses the same
+    // key+iv (delivered via WS payload) to decrypt all of them.
+    private String      encryptionKey   =   "";
+    private String      encryptionIv    =   "";
 
     // ---- Constructor ----
 
@@ -142,6 +148,22 @@ public class AttachmentModel {
 
     public void setLocalFilePath(String localFilePath) {
         this.localFilePath      =   localFilePath;
+    }
+
+    public String getEncryptionKey() {
+        return encryptionKey != null ? encryptionKey : "";
+    }
+
+    public void setEncryptionKey(String encryptionKey) {
+        this.encryptionKey      =   encryptionKey != null ? encryptionKey : "";
+    }
+
+    public String getEncryptionIv() {
+        return encryptionIv != null ? encryptionIv : "";
+    }
+
+    public void setEncryptionIv(String encryptionIv) {
+        this.encryptionIv       =   encryptionIv != null ? encryptionIv : "";
     }
 
     // ---- toString ----

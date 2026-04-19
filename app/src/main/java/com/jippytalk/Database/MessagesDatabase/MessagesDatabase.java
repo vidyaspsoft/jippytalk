@@ -17,8 +17,7 @@ public class MessagesDatabase extends SQLiteOpenHelper {
 
     private static volatile MessagesDatabase    messagesDatabase;
     public static final String                  DB_NAME             = "messages.db";
-    // public static final int                     DATABASE_VERSION    = 2;
-    public static final int                     DATABASE_VERSION    = 7;
+    public static final int                     DATABASE_VERSION    = 9;
     private SQLiteDatabase                      readableDb;
     private SQLiteDatabase                      writableDb;
     private static final SQLiteDatabaseHook     databaseHook                    =   new SqliteDatabaseHook();
@@ -44,6 +43,35 @@ public class MessagesDatabase extends SQLiteOpenHelper {
     public static final String                  LONGITUDE                       = "longitude";  // 13
     public static final String                  IS_REPLY                        = "is_reply"; //14
     public static final String                  REPLY_TO_MESSAGE_ID             = "reply_to"; //15
+
+    // ----- v9: server-assigned room identifier -----
+    // Stable UUID that the backend assigns to each 1-on-1 conversation
+    // (and later to each group). Every REST message response and every WS
+    // payload carries it. We store it so the chat screen can query by
+    // room_id instead of inferring the conversation from receiver_id.
+    public static final String                  ROOM_ID                         = "room_id";
+
+    // ----- Media / attachment columns (added in v8) -----
+    // Only metadata + on-device PATHS are stored — never the file bytes.
+    // The actual files live in /files/sent/, /files/received/, or /cache/.
+
+    public static final String                  FILE_NAME                       = "file_name";  // 16
+    public static final String                  CONTENT_TYPE                    = "content_type";  // 17  image/video/audio/document
+    public static final String                  CONTENT_SUBTYPE                 = "content_subtype";  // 18  pdf/jpg/mp4
+    public static final String                  CAPTION                         = "caption";  // 19
+    public static final String                  MEDIA_WIDTH                     = "media_width";  // 20
+    public static final String                  MEDIA_HEIGHT                    = "media_height";  // 21
+    public static final String                  MEDIA_DURATION                  = "media_duration";  // 22
+    public static final String                  FILE_SIZE                       = "file_size";  // 23
+    public static final String                  S3_KEY                          = "s3_key";  // 24
+    public static final String                  S3_BUCKET                       = "s3_bucket";  // 25
+    public static final String                  FILE_TRANSFER_ID                = "file_transfer_id";  // 26
+    public static final String                  LOCAL_FILE_PATH                 = "local_file_path";  // 27  on-device plaintext path
+    public static final String                  LOCAL_THUMBNAIL_PATH            = "local_thumbnail_path";  // 28  on-device plaintext thumb
+    public static final String                  REMOTE_THUMBNAIL_URL            = "remote_thumbnail_url";  // 29  S3 thumb URL (encrypted bytes)
+    public static final String                  ENCRYPTED_S3_URL                = "encrypted_s3_url";  // 30  S3 file URL (encrypted bytes)
+    public static final String                  ENCRYPTION_KEY                  = "encryption_key";  // 31  per-message AES-256 key (Base64)
+    public static final String                  ENCRYPTION_IV                   = "encryption_iv";  // 32  per-message AES IV (Base64)
 
 
     // ------------------  Chat List Table -----------
@@ -126,7 +154,27 @@ public class MessagesDatabase extends SQLiteOpenHelper {
                 + LATITUDE              + " VARCHAR, "
                 + LONGITUDE             + " VARCHAR, "
                 + IS_REPLY              + " INTEGER DEFAULT 0, "
-                + REPLY_TO_MESSAGE_ID   + " VARCHAR " + ")";
+                + REPLY_TO_MESSAGE_ID   + " VARCHAR, "
+                // ----- v8: media / attachment columns -----
+                + FILE_NAME             + " TEXT, "
+                + CONTENT_TYPE          + " TEXT, "
+                + CONTENT_SUBTYPE       + " TEXT, "
+                + CAPTION               + " TEXT, "
+                + MEDIA_WIDTH           + " INTEGER DEFAULT 0, "
+                + MEDIA_HEIGHT          + " INTEGER DEFAULT 0, "
+                + MEDIA_DURATION        + " INTEGER DEFAULT 0, "
+                + FILE_SIZE             + " INTEGER DEFAULT 0, "
+                + S3_KEY                + " TEXT, "
+                + S3_BUCKET             + " TEXT, "
+                + FILE_TRANSFER_ID      + " TEXT, "
+                + LOCAL_FILE_PATH       + " TEXT, "
+                + LOCAL_THUMBNAIL_PATH  + " TEXT, "
+                + REMOTE_THUMBNAIL_URL  + " TEXT, "
+                + ENCRYPTED_S3_URL      + " TEXT, "
+                + ENCRYPTION_KEY        + " TEXT, "
+                + ENCRYPTION_IV         + " TEXT, "
+                + ROOM_ID               + " TEXT DEFAULT ''"
+                + ")";
 
 
         String chatListsTable = "CREATE TABLE " + CHAT_LIST_TABLE + "("
@@ -140,7 +188,8 @@ public class MessagesDatabase extends SQLiteOpenHelper {
                 + CHAT_LOCKED_TIME          + " INTEGER , "
                 + CHAT_LAST_SCROLL_POSITION + " INTEGER ,"
                 + CHAT_READ_RECEIPTS        + " INTEGER DEFAULT 0,"
-                + CHAT_LAST_MESSAGE_ID_FK   + " INTEGER, " +
+                + CHAT_LAST_MESSAGE_ID_FK   + " INTEGER, "
+                + ROOM_ID                   + " TEXT DEFAULT '', " +
                 " FOREIGN KEY(" + CHAT_LAST_MESSAGE_ID_FK + ") REFERENCES " + MESSAGES_TABLE + "(" + SQLITE_MESSAGE_ID + ")" +
                 "ON DELETE CASCADE "+")";
 
@@ -151,11 +200,61 @@ public class MessagesDatabase extends SQLiteOpenHelper {
         sqLiteDatabase.execSQL("CREATE INDEX idx_message_id ON " + MESSAGES_TABLE + "(" + MESSAGE_ID + ")");
         sqLiteDatabase.execSQL("CREATE INDEX idx_receiver_id ON " + MESSAGES_TABLE + "(" + RECEIVER_ID + ")");
         sqLiteDatabase.execSQL("CREATE INDEX idx_chat_id ON " + CHAT_LIST_TABLE + "(" + CHAT_ID + ")");
+        // v9: allow fast lookups by server-assigned room_id
+        sqLiteDatabase.execSQL("CREATE INDEX idx_msg_room_id ON " + MESSAGES_TABLE + "(" + ROOM_ID + ")");
+        sqLiteDatabase.execSQL("CREATE INDEX idx_chat_room_id ON " + CHAT_LIST_TABLE + "(" + ROOM_ID + ")");
     }
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        Log.e(Extras.LOG_MESSAGE,"messages db upgrade " + oldVersion + " -> " + newVersion);
 
+        // v8: add media / attachment columns to the messages table.
+        // ALTER TABLE ADD COLUMN is non-destructive — existing rows keep their
+        // current values, new columns default to NULL / 0. Existing column
+        // names are not touched.
+        if (oldVersion < 8) {
+            try {
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + FILE_NAME            + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + CONTENT_TYPE         + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + CONTENT_SUBTYPE      + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + CAPTION              + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + MEDIA_WIDTH          + " INTEGER DEFAULT 0");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + MEDIA_HEIGHT         + " INTEGER DEFAULT 0");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + MEDIA_DURATION       + " INTEGER DEFAULT 0");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + FILE_SIZE            + " INTEGER DEFAULT 0");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + S3_KEY               + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + S3_BUCKET            + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + FILE_TRANSFER_ID     + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + LOCAL_FILE_PATH      + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + LOCAL_THUMBNAIL_PATH + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + REMOTE_THUMBNAIL_URL + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + ENCRYPTED_S3_URL     + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + ENCRYPTION_KEY       + " TEXT");
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE + " ADD COLUMN " + ENCRYPTION_IV        + " TEXT");
+                Log.e(Extras.LOG_MESSAGE,"messages db upgraded to v8 (media columns added)");
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE,"failed to add media columns " + e.getMessage());
+            }
+        }
+
+        // v9: add the server-assigned room_id column to both messages and
+        // chat_list tables, plus their lookup indices. Non-destructive —
+        // existing rows get room_id = '' (empty string), to be filled in by
+        // the backfill step after /api/rooms is fetched on app open.
+        if (oldVersion < 9) {
+            try {
+                db.execSQL("ALTER TABLE " + MESSAGES_TABLE   + " ADD COLUMN " + ROOM_ID + " TEXT DEFAULT ''");
+                db.execSQL("ALTER TABLE " + CHAT_LIST_TABLE  + " ADD COLUMN " + ROOM_ID + " TEXT DEFAULT ''");
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_msg_room_id ON "
+                        + MESSAGES_TABLE   + "(" + ROOM_ID + ")");
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_chat_room_id ON "
+                        + CHAT_LIST_TABLE  + "(" + ROOM_ID + ")");
+                Log.e(Extras.LOG_MESSAGE, "messages db upgraded to v9 (room_id column added)");
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "failed to add room_id column " + e.getMessage());
+            }
+        }
     }
 
     public synchronized SQLiteDatabase getReadableDb() {

@@ -176,6 +176,9 @@ public class MainActivity extends AppCompatActivity implements ChatListAdapter.O
             public void onSuccess(List<MessagesApi.Room> rooms) {
                 Log.e(Extras.LOG_MESSAGE, "Fetched " + rooms.size() + " rooms from server");
                 List<ChatListModel> chats = new ArrayList<>();
+                // v9: collect room_id → contactId pairs for backfilling legacy rows
+                // that were inserted before v9 migration added the room_id column.
+                java.util.List<String[]> backfillPairs = new java.util.ArrayList<>();
                 for (MessagesApi.Room room : rooms) {
                     String otherUserId  =   room.getOtherUserId(currentUserId);
                     // Skip self-rooms (shouldn't happen, but guard anyway)
@@ -200,11 +203,43 @@ public class MainActivity extends AppCompatActivity implements ChatListAdapter.O
                             false,
                             room.id
                     ));
+
+                    // Save pair for backfill pass below
+                    if (room.id != null && !room.id.isEmpty()) {
+                        backfillPairs.add(new String[]{room.id, otherUserId});
+                    }
                 }
 
                 if (!chats.isEmpty()) {
                     chatListAdapter.submitList(chats);
                     updateEmptyStateVisibility(false);
+                }
+
+                // Run the backfill on the DB's write executor so it doesn't
+                // block the UI. Walks every (roomId, contactId) pair from the
+                // server and UPDATEs any local rows where room_id is still ''.
+                // Idempotent — safe to run on every /api/rooms call.
+                if (!backfillPairs.isEmpty()) {
+                    final java.util.List<String[]> pairs = backfillPairs;
+                    new Thread(() -> {
+                        try {
+                            com.jippytalk.Database.MessagesDatabase.MessagesDatabaseDAO dao =
+                                    com.jippytalk.MyApplication.getInstance()
+                                            .getDatabaseServiceLocator()
+                                            .getMessagesDatabaseDAO();
+                            int total = 0;
+                            for (String[] p : pairs) {
+                                total += dao.backfillRoomIdForContact(p[0], p[1]);
+                            }
+                            if (total > 0) {
+                                Log.e(Extras.LOG_MESSAGE,
+                                        "room_id backfill: " + total
+                                        + " rows updated across " + pairs.size() + " rooms");
+                            }
+                        } catch (Exception e) {
+                            Log.e(Extras.LOG_MESSAGE, "room_id backfill failed: " + e.getMessage());
+                        }
+                    }).start();
                 }
             }
 

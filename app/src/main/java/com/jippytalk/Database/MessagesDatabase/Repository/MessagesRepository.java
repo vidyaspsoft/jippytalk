@@ -1,7 +1,5 @@
 package com.jippytalk.Database.MessagesDatabase.Repository;
 
-import static android.view.View.VISIBLE;
-
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.database.Cursor;
@@ -9,8 +7,6 @@ import android.database.SQLException;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
-import android.view.View;
-import android.widget.Toast;
 
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
@@ -22,9 +18,7 @@ import com.jippytalk.Database.MessagesDatabase.Model.MarkMessagesAsDeliveredAndS
 import com.jippytalk.Database.MessagesDatabase.Model.MarkMessagesAsDeliveredModel;
 import com.jippytalk.Database.MessagesDatabase.Model.MarkMessagesAsSeenModel;
 import com.jippytalk.Managers.ChatManager;
-import com.jippytalk.MessagesForward.Model.MessageForwardChatsListModel;
 import com.jippytalk.WebSocketConnection;
-import com.jippytalk.ServiceLocators.AppServiceLocator;
 import com.jippytalk.ServiceLocators.DatabaseServiceLocator;
 import com.jippytalk.Common.SingleLiveEvent;
 import com.jippytalk.Database.MessagesDatabase.MessagesDatabaseDAO;
@@ -174,12 +168,27 @@ public class MessagesRepository {
         });
     }
 
+    // Back-compat overload — delegates to the roomId version with empty string.
     public void insertMessageToLocalStorageFromService(String messageId, int messageDirection, String receiverId,
                                             String message, int messageStatus, int needPush, long sentTimestamp,
                                             long receivedTimestamp, long readTimestamp, int isStarred,
                                             int editedStatus, int messageType, double latitude,
                                             double longitude, int isReply, String replyToMsgId,
                                             int chatArchive, Runnable onComplete) {
+        insertMessageToLocalStorageFromService(messageId, messageDirection, receiverId,
+                message, messageStatus, needPush, sentTimestamp,
+                receivedTimestamp, readTimestamp, isStarred,
+                editedStatus, messageType, latitude,
+                longitude, isReply, replyToMsgId,
+                chatArchive, "", onComplete);
+    }
+
+    public void insertMessageToLocalStorageFromService(String messageId, int messageDirection, String receiverId,
+                                            String message, int messageStatus, int needPush, long sentTimestamp,
+                                            long receivedTimestamp, long readTimestamp, int isStarred,
+                                            int editedStatus, int messageType, double latitude,
+                                            double longitude, int isReply, String replyToMsgId,
+                                            int chatArchive, String roomId, Runnable onComplete) {
 
         writeExecutor.execute(() -> {
             try {
@@ -189,7 +198,8 @@ public class MessagesRepository {
                         sentTimestamp, receivedTimestamp, readTimestamp,
                         isStarred, editedStatus, messageType,
                         latitude, longitude, isReply,
-                        replyToMsgId, chatArchive);
+                        replyToMsgId, chatArchive,
+                        roomId != null ? roomId : "");
 
                 if (inserted && onComplete != null) {
                     new Handler(Looper.getMainLooper()).post(onComplete);
@@ -201,57 +211,109 @@ public class MessagesRepository {
         });
     }
 
+    /**
+     * Inserts a media/file message row using the v8 column layout (no JSON blob).
+     * Only file metadata + on-device PATHS are persisted — the file BYTES live
+     * on disk under /files/sent/ or /files/received/. The DAO mirrors the chat
+     * list sync behavior of insertMessage so the chat_list always reflects the
+     * latest message for the contact.
+     */
+    public void insertMediaMessageToLocalStorageFromService(String messageId, int messageDirection, String receiverId,
+                                            String message, int messageStatus, int needPush, long sentTimestamp,
+                                            long receivedTimestamp, long readTimestamp, int isStarred,
+                                            int editedStatus, int messageType, double latitude,
+                                            double longitude, int isReply, String replyToMsgId,
+                                            int chatArchive,
+                                            String fileName, String contentType, String contentSubtype,
+                                            String caption, int mediaWidth, int mediaHeight,
+                                            long mediaDuration, long fileSize,
+                                            String s3Key, String s3Bucket, String fileTransferId,
+                                            String localFilePath, String localThumbnailPath,
+                                            String remoteThumbnailUrl, String encryptedS3Url,
+                                            String encryptionKey, String encryptionIv,
+                                            String roomId,
+                                            Runnable onComplete) {
+
+        writeExecutor.execute(() -> {
+            try {
+                boolean inserted = messagesDatabaseDAO.insertMessageWithMedia(
+                        messageId, messageDirection, receiverId,
+                        message, messageStatus, needPush,
+                        sentTimestamp, receivedTimestamp, readTimestamp,
+                        isStarred, editedStatus, messageType,
+                        latitude, longitude, isReply,
+                        replyToMsgId, chatArchive,
+                        fileName, contentType, contentSubtype,
+                        caption, mediaWidth, mediaHeight,
+                        mediaDuration, fileSize,
+                        s3Key, s3Bucket, fileTransferId,
+                        localFilePath, localThumbnailPath,
+                        remoteThumbnailUrl, encryptedS3Url,
+                        encryptionKey, encryptionIv,
+                        roomId != null ? roomId : "");
+
+                if (inserted && onComplete != null) {
+                    new Handler(Looper.getMainLooper()).post(onComplete);
+                }
+            }
+            catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "media message insert failed error in repository " + e.getMessage(), e);
+            }
+        });
+    }
+
+    /**
+     * Updates LOCAL_FILE_PATH on a media row after the file is copied into the
+     * sent/ folder (sender) or downloaded into the received/ folder (receiver).
+     * Refreshes the message list so the adapter rebinds with the new path.
+     */
+    public void updateLocalFilePathAndRefresh(String messageId, String localFilePath, String contactId) {
+        writeExecutor.execute(() -> {
+            try {
+                messagesDatabaseDAO.updateLocalFilePath(messageId, localFilePath);
+                getMessagesForContact(contactId);
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateLocalFilePathAndRefresh: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Updates LOCAL_THUMBNAIL_PATH on a media row after the thumbnail is
+     * generated (sender) or downloaded + decrypted (receiver). Refreshes the
+     * message list so the adapter rebinds with the new path.
+     */
+    public void updateLocalThumbnailPathAndRefresh(String messageId, String localThumbnailPath, String contactId) {
+        writeExecutor.execute(() -> {
+            try {
+                messagesDatabaseDAO.updateLocalThumbnailPath(messageId, localThumbnailPath);
+                getMessagesForContact(contactId);
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateLocalThumbnailPathAndRefresh: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Updates S3_KEY / S3_BUCKET / ENCRYPTED_S3_URL on an outgoing media row
+     * after a successful upload, then refreshes the message list.
+     */
+    public void updateMediaS3InfoAndRefresh(String messageId, String s3Key, String s3Bucket,
+                                            String encryptedS3Url, String contactId) {
+        writeExecutor.execute(() -> {
+            try {
+                messagesDatabaseDAO.updateMessageS3Info(messageId, s3Key, s3Bucket, encryptedS3Url);
+                getMessagesForContact(contactId);
+            } catch (Exception e) {
+                Log.e(Extras.LOG_MESSAGE, "updateMediaS3InfoAndRefresh: " + e.getMessage());
+            }
+        });
+    }
+
     // ------------- Database Insertions ends here --------------------------------------
 
 
     // ------------- Database Reads starts from here -----------------------------------
-
-//    public void getMessagesForContactChatScreen(String contactId, int limit, int offset) {
-//        readExecutor.execute(() -> {
-//            String contactName      =   contactsRepository.getContactNameForRepliedMessages(contactId);
-//            ArrayList<MessageModal> messages = new ArrayList<>();
-//            try (Cursor cursor = messagesDatabaseDAO.getMessagesPaginationForContact(contactId, limit, offset)) {
-//                if (cursor != null && cursor.moveToFirst()) {
-//                    do {
-//                        String  repliedMessageText          = cursor.getString(cursor.getColumnIndexOrThrow("replied_message_text"));
-//                        int     repliedMessageDirection     = cursor.getInt(cursor.getColumnIndexOrThrow("replied_message_direction"));
-//                        MessageModal messageModal = new MessageModal(
-//                                cursor.getString(cursor.getColumnIndexOrThrow(MessagesDatabase.MESSAGE_ID)),
-//                                cursor.getInt(cursor.getColumnIndexOrThrow(MessagesDatabase.MESSAGE_DIRECTION)),
-//                                cursor.getString(cursor.getColumnIndexOrThrow(MessagesDatabase.RECEIVER_ID)),
-//                                cursor.getString(cursor.getColumnIndexOrThrow(MessagesDatabase.MESSAGE)),
-//                                cursor.getInt(cursor.getColumnIndexOrThrow(MessagesDatabase.MESSAGE_STATUS)),
-//                                cursor.getLong(cursor.getColumnIndexOrThrow(MessagesDatabase.TIMESTAMP)),
-//                                cursor.getInt(cursor.getColumnIndexOrThrow(MessagesDatabase.STARRED)),
-//                                cursor.getInt(cursor.getColumnIndexOrThrow(MessagesDatabase.EDIT_STATUS)),
-//                                cursor.getInt(cursor.getColumnIndexOrThrow(MessagesDatabase.MESSAGE_TYPE)),
-//                                cursor.getInt(cursor.getColumnIndexOrThrow(MessagesDatabase.IS_REPLY)),
-//                                cursor.getString(cursor.getColumnIndexOrThrow(MessagesDatabase.REPLY_TO_MESSAGE_ID)),
-//                                repliedMessageText,
-//                                repliedMessageDirection,
-//                                contactName
-//                        );
-//                        messages.add(messageModal);
-//                    }
-//                    while (cursor.moveToNext());
-//                    List<MessageModal> currentList = messagesMutableData.getValue();
-//                    if (currentList == null || offset == 0) {
-//                        messagesMutableData.postValue(messages);
-//                    } else {
-//                        ArrayList<MessageModal> updatedList = new ArrayList<>(messages);
-//                        updatedList.addAll(currentList);
-//                        messagesMutableData.postValue(updatedList);
-//                    }
-//                } else {
-//                    Log.e(Extras.LOG_MESSAGE, "Error loading messages cursor null");
-//                    messagesMutableData.postValue(new ArrayList<>());
-//                }
-//            } catch (Exception e) {
-//                Log.e(Extras.LOG_MESSAGE, "Error loading messages " + e.getMessage());
-//                messagesMutableData.postValue(new ArrayList<>());
-//            }
-//        });
-//    }
 
     public void getMessagesForContact(String contactId) {
         readExecutor.execute(() -> {
@@ -278,7 +340,10 @@ public class MessagesRepository {
                                 repliedMessageDirection,
                                 contactName
                         );
-                        populateMediaFieldsFromJson(messageModal);
+                        // v8: prefer real columns, fall back to legacy JSON blob
+                        if (!populateMediaFieldsFromCursor(messageModal, cursor)) {
+                            populateMediaFieldsFromJson(messageModal);
+                        }
                         messages.add(messageModal);
                     }
                     while (cursor.moveToNext());
@@ -974,6 +1039,104 @@ public class MessagesRepository {
      *
      * For plain text messages this is a no-op.
      */
+    /**
+     * Reads media columns from the cursor into the MessageModal. Used for v8+
+     * rows where media metadata lives in real columns (no JSON blob). Returns
+     * true if any media column was actually populated — caller can use this to
+     * decide whether the legacy populateMediaFieldsFromJson() fallback is needed
+     * for older rows.
+     */
+    private boolean populateMediaFieldsFromCursor(MessageModal model, Cursor cursor) {
+        int type = model.getMessageType();
+        if (type != MessagesManager.IMAGE_MESSAGE
+                && type != MessagesManager.VIDEO_MESSAGE
+                && type != MessagesManager.AUDIO_MESSAGE
+                && type != MessagesManager.DOCUMENT_MESSAGE) {
+            return false;
+        }
+        try {
+            // The new columns may not exist on legacy DB files (v < 8). The
+            // ALTER TABLE in onUpgrade adds them, but be defensive.
+            int idxFileName = cursor.getColumnIndex(MessagesDatabase.FILE_NAME);
+            if (idxFileName < 0) return false;
+
+            String fileName       = cursor.getString(idxFileName);
+            String contentType    = cursor.getString(cursor.getColumnIndex(MessagesDatabase.CONTENT_TYPE));
+            String contentSubtype = cursor.getString(cursor.getColumnIndex(MessagesDatabase.CONTENT_SUBTYPE));
+            String caption        = cursor.getString(cursor.getColumnIndex(MessagesDatabase.CAPTION));
+            int mediaWidth        = cursor.getInt(cursor.getColumnIndex(MessagesDatabase.MEDIA_WIDTH));
+            int mediaHeight       = cursor.getInt(cursor.getColumnIndex(MessagesDatabase.MEDIA_HEIGHT));
+            long mediaDuration    = cursor.getLong(cursor.getColumnIndex(MessagesDatabase.MEDIA_DURATION));
+            long fileSize         = cursor.getLong(cursor.getColumnIndex(MessagesDatabase.FILE_SIZE));
+            String s3Key          = cursor.getString(cursor.getColumnIndex(MessagesDatabase.S3_KEY));
+            String s3Bucket       = cursor.getString(cursor.getColumnIndex(MessagesDatabase.S3_BUCKET));
+            String fileTransferId = cursor.getString(cursor.getColumnIndex(MessagesDatabase.FILE_TRANSFER_ID));
+            String localFilePath  = cursor.getString(cursor.getColumnIndex(MessagesDatabase.LOCAL_FILE_PATH));
+            String localThumbPath = cursor.getString(cursor.getColumnIndex(MessagesDatabase.LOCAL_THUMBNAIL_PATH));
+            String remoteThumbUrl = cursor.getString(cursor.getColumnIndex(MessagesDatabase.REMOTE_THUMBNAIL_URL));
+            String encryptedS3Url = cursor.getString(cursor.getColumnIndex(MessagesDatabase.ENCRYPTED_S3_URL));
+            String encryptionKey  = cursor.getString(cursor.getColumnIndex(MessagesDatabase.ENCRYPTION_KEY));
+            String encryptionIv   = cursor.getString(cursor.getColumnIndex(MessagesDatabase.ENCRYPTION_IV));
+            int    idxRoomId      = cursor.getColumnIndex(MessagesDatabase.ROOM_ID);
+            String roomIdVal      = idxRoomId >= 0 ? cursor.getString(idxRoomId) : "";
+
+            // If all media columns are empty/null, this is either a legacy row
+            // (still using JSON in `message`) or an unknown state — let the
+            // caller fall back to JSON parsing.
+            boolean hasAnyMedia =
+                    (fileName != null && !fileName.isEmpty())
+                    || (s3Key != null && !s3Key.isEmpty())
+                    || (localFilePath != null && !localFilePath.isEmpty());
+            if (!hasAnyMedia) return false;
+
+            model.setFileName(fileName != null ? fileName : "");
+            model.setCaption(caption != null ? caption : "");
+            model.setContentSubtype(contentSubtype != null ? contentSubtype : "");
+            model.setMediaWidth(mediaWidth);
+            model.setMediaHeight(mediaHeight);
+            model.setMediaDuration(mediaDuration);
+            model.setFileSize(fileSize);
+            model.setS3Key(s3Key);
+            model.setS3Bucket(s3Bucket);
+            model.setFileTransferId(fileTransferId);
+            model.setRemoteThumbnailUrl(remoteThumbUrl);
+            model.setEncryptedS3Url(encryptedS3Url);
+            model.setEncryptionKey(encryptionKey);
+            model.setEncryptionIv(encryptionIv);
+            model.setRoomId(roomIdVal);
+
+            // Thumbnail resolution order:
+            //   1. local_thumbnail_path  (sender's pre-generated PNG OR receiver's
+            //      already-decrypted thumbnail saved by autoFetchEncryptedThumbnails)
+            //   2. remote_thumbnail_url  (only safe when bytes are PLAINTEXT —
+            //      legacy rows). When encryption_key is set the bytes are AES-GCM
+            //      ciphertext and Glide cannot render them — leave thumbnailUri
+            //      empty so the adapter shows the doc icon until the receiver-side
+            //      auto-fetch decrypts it and persists local_thumbnail_path.
+            if (localThumbPath != null && !localThumbPath.isEmpty()) {
+                model.setThumbnailUri(localThumbPath);
+            } else if (remoteThumbUrl != null && !remoteThumbUrl.isEmpty()
+                    && (encryptionKey == null || encryptionKey.isEmpty())) {
+                model.setThumbnailUri(remoteThumbUrl);
+            } else {
+                model.setThumbnailUri("");
+            }
+
+            // Prefer the sender's local plaintext copy; otherwise fall back to
+            // s3_key as the remote identifier the adapter can act on.
+            if (localFilePath != null && !localFilePath.isEmpty()) {
+                model.setMediaUri(localFilePath);
+            } else {
+                model.setMediaUri(s3Key != null ? s3Key : "");
+            }
+            return true;
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "populateMediaFieldsFromCursor failed for "
+                    + model.getMessageId() + ": " + e.getMessage());
+            return false;
+        }
+    }
+
     private void populateMediaFieldsFromJson(MessageModal model) {
         int type = model.getMessageType();
         if (type != MessagesManager.IMAGE_MESSAGE
@@ -994,7 +1157,35 @@ public class MessagesRepository {
             model.setMediaWidth(json.optInt("width", 0));
             model.setMediaHeight(json.optInt("height", 0));
             model.setMediaDuration(json.optLong("duration", 0));
-            model.setThumbnailUri(json.optString("thumbnail", ""));
+            // Legacy fields → expose on the model so receiver-side auto-fetch
+            // and download trigger don't have to reparse the JSON later.
+            model.setS3Key(json.optString("s3_key", ""));
+            model.setS3Bucket(json.optString("bucket", ""));
+            model.setFileTransferId(json.optString("file_transfer_id", ""));
+            model.setRemoteThumbnailUrl(json.optString("thumbnail", ""));
+            model.setEncryptedS3Url(json.optString("encrypted_s3_url", ""));
+            model.setEncryptionKey(json.optString("encryption_key", ""));
+            model.setEncryptionIv(json.optString("encryption_iv", ""));
+            // Thumbnail resolution order:
+            //   1. local_thumbnail_path  → sender's pre-generated PNG, OR receiver's
+            //      already-decrypted thumbnail saved by autoFetchEncryptedThumbnails
+            //   2. remote `thumbnail` URL  → only safe when bytes are PLAINTEXT.
+            //      If encryption_key is set, the bytes at the URL are AES-GCM
+            //      ciphertext and Glide cannot render them — leave thumbnailUri
+            //      empty so the adapter shows the doc icon until the receiver-side
+            //      auto-fetch decrypts it and persists local_thumbnail_path.
+            String localThumbPath = json.optString("local_thumbnail_path", "");
+            if (!localThumbPath.isEmpty()) {
+                model.setThumbnailUri(localThumbPath);
+            } else {
+                String remoteThumb = json.optString("thumbnail", "");
+                String thumbEncKey = json.optString("encryption_key", "");
+                if (!remoteThumb.isEmpty() && thumbEncKey.isEmpty()) {
+                    model.setThumbnailUri(remoteThumb);  // legacy plaintext
+                } else {
+                    model.setThumbnailUri("");           // wait for local decrypt
+                }
+            }
             model.setFileSize(json.optLong("file_size", 0));
 
             // Prefer a local file path (sender's copy) if present; otherwise use s3_key

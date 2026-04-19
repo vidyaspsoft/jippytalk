@@ -16,6 +16,8 @@ import com.jippytalk.R;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * ViewPager2 adapter — shows full-size preview for each selected attachment.
@@ -29,6 +31,9 @@ public class PreviewPagerAdapter extends RecyclerView.Adapter<PreviewPagerAdapte
 
     private final Context               context;
     private final List<PreviewItem>     items;
+    // Single-thread pool for PDF rendering — PdfRenderer is not thread-safe,
+    // and we only ever render one page at a time.
+    private final ExecutorService       pdfRenderExecutor = Executors.newSingleThreadExecutor();
 
     public PreviewPagerAdapter(Context context, List<PreviewItem> items) {
         this.context    =   context;
@@ -76,19 +81,16 @@ public class PreviewPagerAdapter extends RecyclerView.Adapter<PreviewPagerAdapte
             }
             default -> {
                 // Document: try to render PDF first page as image preview.
-                // For non-PDF docs (docx, xlsx, etc.) fall back to icon card.
+                // For non-PDF docs (docx, xlsx, etc.) show the generic icon.
                 boolean isPdf = item.extension != null
                         && item.extension.equalsIgnoreCase("pdf");
                 if (isPdf) {
-                    java.io.File thumb = com.jippytalk.Messages.Attachment.ThumbnailGenerator
-                            .generateThumbnail(context, item.uri, "document");
-                    if (thumb != null && thumb.exists()) {
-                        h.ivPreview.setVisibility(View.VISIBLE);
-                        h.llDocPreview.setVisibility(View.GONE);
-                        Glide.with(context).load(thumb).into(h.ivPreview);
-                    } else {
-                        showDocIcon(h, item);
-                    }
+                    // Show the doc icon immediately so the UI doesn't stall.
+                    // Kick off PDF rendering off the main thread — the
+                    // ThumbnailGenerator caps bitmap size so it won't OOM,
+                    // but PdfRenderer on a 200MB file can still take seconds.
+                    showDocIcon(h, item);
+                    renderPdfAsync(h, item);
                 } else {
                     showDocIcon(h, item);
                 }
@@ -103,9 +105,47 @@ public class PreviewPagerAdapter extends RecyclerView.Adapter<PreviewPagerAdapte
 
     private void showDocIcon(PreviewViewHolder h, PreviewItem item) {
         h.llDocPreview.setVisibility(View.VISIBLE);
+        h.ivPreview.setVisibility(View.GONE);
         h.tvDocFileName.setText(item.fileName != null ? item.fileName : "File");
         String ext = item.extension != null ? item.extension.toUpperCase(Locale.US) : "";
         h.tvDocFileSize.setText(buildSubtitle("", ext, item.fileSize));
+    }
+
+    /**
+     * Renders the first PDF page on a background thread and, if successful,
+     * swaps the doc icon for the rendered image. Safe against OOM: the
+     * ThumbnailGenerator caps bitmap size to ~10 MB. On failure, the doc
+     * icon stays visible.
+     *
+     * We snapshot the ViewHolder + item at invocation time. If the holder
+     * has been recycled for a different item by the time the render
+     * finishes, we skip the UI update (tag check below).
+     */
+    private void renderPdfAsync(PreviewViewHolder h, PreviewItem item) {
+        // Tag the ImageView with the current item's URI so we can detect
+        // stale results if the holder has been recycled for a different
+        // item by the time the PDF render finishes.
+        final Object currentTag = item.uri;
+        h.ivPreview.setTag(currentTag);
+        pdfRenderExecutor.execute(() -> {
+            java.io.File thumb;
+            try {
+                thumb = com.jippytalk.Messages.Attachment.ThumbnailGenerator
+                        .generateThumbnail(context, item.uri, "document");
+            } catch (Throwable t) {
+                android.util.Log.e("JippyTalk",
+                        "PreviewPagerAdapter: PDF render failed — " + t.getMessage());
+                return;
+            }
+            if (thumb == null || !thumb.exists()) return;
+            h.ivPreview.post(() -> {
+                // Bail if the holder has been rebound to a different item
+                if (h.ivPreview.getTag() != currentTag) return;
+                h.llDocPreview.setVisibility(View.GONE);
+                h.ivPreview.setVisibility(View.VISIBLE);
+                Glide.with(context).load(thumb).into(h.ivPreview);
+            });
+        });
     }
 
     // -------------------- Formatting Helpers ---------------------

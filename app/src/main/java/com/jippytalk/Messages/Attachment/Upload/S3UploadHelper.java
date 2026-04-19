@@ -158,6 +158,7 @@ public class S3UploadHelper {
      */
     private void executeUpload(UploadTask task) {
         String  messageId   =   task.getMessageId();
+        java.io.File encryptedTempFile = null;
         try {
             if (task.isCancelled()) {
                 return;
@@ -177,11 +178,56 @@ public class S3UploadHelper {
                 return;
             }
 
-            Log.e(Extras.LOG_MESSAGE, "Starting upload for " + fileName + " (" + fileSize + " bytes)");
+            // Step 1b: If the model carries encryption keys, stream the plaintext
+            // file through AES-256-GCM into a temp ciphertext file in cache.
+            // We then upload the ciphertext and its (slightly larger) size.
+            // The plaintext local file is left untouched so the sender can still
+            // open it locally without decryption.
+            String b64Key = task.getAttachmentModel().getEncryptionKey();
+            String b64Iv  = task.getAttachmentModel().getEncryptionIv();
+            Uri    uploadUri;
+            long   uploadSize;
+            if (b64Key != null && !b64Key.isEmpty() && b64Iv != null && !b64Iv.isEmpty()) {
+                encryptedTempFile = new java.io.File(context.getCacheDir(),
+                        "enc_up_" + messageId + "_" + System.currentTimeMillis() + ".bin");
+                try (InputStream pin = contentResolver.openInputStream(fileUri);
+                     java.io.FileOutputStream fout = new java.io.FileOutputStream(encryptedTempFile)) {
+                    if (pin == null) {
+                        postFailure(task, "Unable to open plaintext file for encryption");
+                        return;
+                    }
+                    com.jippytalk.Encryption.MessageCryptoHelper.encryptStream(
+                            pin, fout, b64Key, b64Iv);
+                }
+                uploadUri  = Uri.fromFile(encryptedTempFile);
+                uploadSize = encryptedTempFile.length();
+                Log.e(Extras.LOG_MESSAGE, "Encrypted file for upload: " + fileName
+                        + " plaintext=" + fileSize + " ciphertext=" + uploadSize);
+            } else {
+                uploadUri  = fileUri;
+                uploadSize = fileSize;
+            }
 
-            // Step 2: Request presigned URL
+            Log.e(Extras.LOG_MESSAGE, "Starting upload for " + fileName + " (" + uploadSize + " bytes)");
+
+            // Step 2: Request presigned URL using the on-the-wire size.
+            //
+            // Prefix the server-side object name with the current epoch-ms so
+            // every upload lands at a unique S3 key — even when the same
+            // local file is sent twice in a row. Without this the backend
+            // derives the key from the raw file name ("50mb.pdf") and S3
+            // overwrites the first object with the second; once the first
+            // recipient downloads and the backend deletes the object, the
+            // second recipient gets a 404 because the single shared object
+            // is already gone.
+            //
+            // Format: "<epochMs>_<originalName>". The ".<ext>" is preserved
+            // so backend MIME routing + the receiver's filename display work
+            // unchanged.
+            String              uploadFileName  =   System.currentTimeMillis() + "_"
+                                                    + (fileName != null ? fileName : "file");
             String              jwtToken        =   sharedPreferences.getString(SharedPreferenceDetails.JWT_TOKEN, "");
-            PresignResponse     presignResponse =   requestPresignedUrl(fileName, fileSize, jwtToken);
+            PresignResponse     presignResponse =   requestPresignedUrl(uploadFileName, uploadSize, jwtToken);
 
             if (presignResponse == null) {
                 postFailure(task, "Failed to get presigned URL");
@@ -192,9 +238,9 @@ public class S3UploadHelper {
 
             Log.e(Extras.LOG_MESSAGE, "Presigned URL received. S3 key: " + presignResponse.getS3Key());
 
-            // Step 3: Upload file to S3 with throttled progress
-            boolean uploadSuccess   =   uploadToS3(fileUri, presignResponse.getPresignedUrl(),
-                                        fileSize, task);
+            // Step 3: Upload (encrypted or plaintext) bytes to S3 with throttled progress
+            boolean uploadSuccess   =   uploadToS3(uploadUri, presignResponse.getPresignedUrl(),
+                                        uploadSize, task);
 
             if (task.isCancelled()) return;
 
@@ -212,6 +258,11 @@ public class S3UploadHelper {
             }
         } finally {
             activeTasks.remove(messageId);
+            // Always clean up the encrypted temp file (it's a duplicate of the
+            // plaintext encrypted in cache — the original local file is preserved)
+            if (encryptedTempFile != null && encryptedTempFile.exists()) {
+                try { encryptedTempFile.delete(); } catch (Exception ignored) {}
+            }
         }
     }
 
@@ -362,7 +413,21 @@ public class S3UploadHelper {
             if (statusCode >= 200 && statusCode < 300) {
                 return true;
             } else {
-                postFailure(task, "S3 upload failed with status: " + statusCode);
+                // Pull the S3 error XML body so 403 becomes diagnostic.
+                // Typical payload: <Error><Code>AccessDenied</Code><Message>...</Message></Error>
+                String errorBody = "";
+                try (java.io.InputStream es = connection.getErrorStream()) {
+                    if (es != null) {
+                        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                        byte[] buf = new byte[2048];
+                        int n;
+                        while ((n = es.read(buf)) != -1) bos.write(buf, 0, n);
+                        errorBody = bos.toString("UTF-8");
+                    }
+                } catch (Exception ignored) {}
+                Log.e(Extras.LOG_MESSAGE, "S3 upload error body: " + errorBody);
+                postFailure(task, "S3 upload failed with status: " + statusCode
+                        + (errorBody.isEmpty() ? "" : " — " + errorBody));
                 return false;
             }
 

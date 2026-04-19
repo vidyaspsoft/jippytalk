@@ -10,9 +10,13 @@ import android.util.Log;
 
 import com.jippytalk.Extras;
 
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.security.SecureRandom;
 
 import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.CipherOutputStream;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
@@ -126,6 +130,108 @@ public class MessageCryptoHelper {
         } catch (Exception e) {
             Log.e(Extras.LOG_MESSAGE, "MessageCryptoHelper.decrypt failed: " + e.getMessage());
             return null;
+        }
+    }
+
+    // -------------------- Key Generation ---------------------
+
+    /**
+     * Generates a fresh per-message AES-256 key + 12-byte IV pair.
+     * The returned EncryptionResult has an empty ciphertext field — only
+     * the key + iv are populated. Use this when you need to encrypt
+     * multiple things (file bytes, thumbnail bytes, caption, URLs) with
+     * the same key+iv for a single message.
+     */
+    public static EncryptionResult generateKeyIv() {
+        try {
+            KeyGenerator keyGen     =   KeyGenerator.getInstance(ALGORITHM);
+            keyGen.init(KEY_SIZE_BITS, new SecureRandom());
+            SecretKey    secretKey  =   keyGen.generateKey();
+
+            byte[]       iv         =   new byte[IV_SIZE_BYTES];
+            new SecureRandom().nextBytes(iv);
+
+            String b64Key   =   Base64.encodeToString(secretKey.getEncoded(), Base64.NO_WRAP);
+            String b64Iv    =   Base64.encodeToString(iv, Base64.NO_WRAP);
+            return new EncryptionResult("", b64Key, b64Iv);
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "MessageCryptoHelper.generateKeyIv failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    // -------------------- Streaming Encrypt / Decrypt ---------------------
+
+    /**
+     * Encrypts an InputStream into an OutputStream using AES-256-GCM with the
+     * provided Base64 key + IV. Both streams must be opened by the caller and
+     * are closed by this method on completion (the wrapping CipherOutputStream
+     * is closed, which finalises the GCM auth tag).
+     *
+     * Used for streaming file/thumbnail bytes through encryption without
+     * loading the whole file into memory.
+     *
+     * @param in     plaintext input
+     * @param out    ciphertext output (will be flushed and closed)
+     * @param b64Key Base64 AES-256 key
+     * @param b64Iv  Base64 12-byte IV
+     * @throws Exception on I/O or crypto failure
+     */
+    public static void encryptStream(InputStream in, OutputStream out,
+                                     String b64Key, String b64Iv) throws Exception {
+        byte[]              keyBytes    =   Base64.decode(b64Key, Base64.NO_WRAP);
+        byte[]              ivBytes     =   Base64.decode(b64Iv, Base64.NO_WRAP);
+        SecretKeySpec       keySpec     =   new SecretKeySpec(keyBytes, ALGORITHM);
+        GCMParameterSpec    gcmSpec     =   new GCMParameterSpec(GCM_TAG_BITS, ivBytes);
+
+        Cipher              cipher      =   Cipher.getInstance(TRANSFORMATION);
+        cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec);
+
+        CipherOutputStream cos = new CipherOutputStream(out, cipher);
+        try {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                cos.write(buf, 0, n);
+            }
+            cos.flush();
+        } finally {
+            try { cos.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Decrypts an InputStream into an OutputStream using AES-256-GCM with the
+     * provided Base64 key + IV. Wraps the input in CipherInputStream so the
+     * GCM auth tag is verified at end-of-stream — if the ciphertext was
+     * tampered with, an exception is thrown when the last bytes are read.
+     *
+     * @param in     ciphertext input
+     * @param out    plaintext output (will be flushed; not closed)
+     * @param b64Key Base64 AES-256 key
+     * @param b64Iv  Base64 12-byte IV
+     * @throws Exception on I/O failure or auth tag mismatch
+     */
+    public static void decryptStream(InputStream in, OutputStream out,
+                                     String b64Key, String b64Iv) throws Exception {
+        byte[]              keyBytes    =   Base64.decode(b64Key, Base64.NO_WRAP);
+        byte[]              ivBytes     =   Base64.decode(b64Iv, Base64.NO_WRAP);
+        SecretKeySpec       keySpec     =   new SecretKeySpec(keyBytes, ALGORITHM);
+        GCMParameterSpec    gcmSpec     =   new GCMParameterSpec(GCM_TAG_BITS, ivBytes);
+
+        Cipher              cipher      =   Cipher.getInstance(TRANSFORMATION);
+        cipher.init(Cipher.DECRYPT_MODE, keySpec, gcmSpec);
+
+        CipherInputStream cis = new CipherInputStream(in, cipher);
+        try {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = cis.read(buf)) != -1) {
+                out.write(buf, 0, n);
+            }
+            out.flush();
+        } finally {
+            try { cis.close(); } catch (Exception ignored) {}
         }
     }
 

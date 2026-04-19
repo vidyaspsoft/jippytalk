@@ -132,14 +132,42 @@
                             tools:text="18 KB · JSON" />
                     </LinearLayout>
 
-                    <!-- Upload progress spinner (visible during S3 upload) -->
-                    <ProgressBar
-                        android:id="@+id/pbPillUpload"
-                        android:layout_width="28dp"
-                        android:layout_height="28dp"
+                    <!-- WhatsApp-style circular upload progress: a determinate
+                         ring around a centered "%" number. Visibility on the
+                         FrameLayout drives both children. The percentage is
+                         pushed in by MessageAdapter.onBindViewHolder's PROGRESS
+                         payload branch (state.getProgress()), which receives
+                         live byte-level updates via WorkInfo from the
+                         MediaUploadWorker. -->
+                    <FrameLayout
+                        android:id="@+id/flPillUploadProgress"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
                         android:layout_marginStart="8dp"
-                        android:indeterminateTint="?attr/colorPrimary"
-                        android:visibility="gone" />
+                        android:layout_gravity="center_vertical"
+                        android:visibility="gone">
+
+                        <com.google.android.material.progressindicator.CircularProgressIndicator
+                            android:id="@+id/pbPillUpload"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            app:indicatorColor="?attr/colorPrimary"
+                            app:indicatorSize="36dp"
+                            app:trackColor="@android:color/darker_gray"
+                            app:trackThickness="3dp"
+                            android:max="100"
+                            android:indeterminate="false" />
+
+                        <TextView
+                            android:id="@+id/tvPillUploadProgress"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_gravity="center"
+                            android:textColor="?attr/colorPrimary"
+                            android:textSize="9sp"
+                            android:textStyle="bold"
+                            tools:text="42%" />
+                    </FrameLayout>
 
                     <!-- Retry icon (visible on upload failure) -->
                     <ImageView

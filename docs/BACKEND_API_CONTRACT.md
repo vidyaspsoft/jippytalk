@@ -106,7 +106,7 @@ Response: `{ "count": 42 }`
 {
     "presigned_url": "https://s3.amazonaws.com/bucket/uploads/userId/file.jpg?X-Amz-...",
     "s3_key": "uploads/userId/IMG_20260409_143022.jpg",
-    "bucket": "bank-ster-dev"
+    "bucket": "mariox-s3"
 }
 ```
 
@@ -371,7 +371,7 @@ After decryption, the JSON looks like:
     "height": 1080,
     "duration": 0,
     "thumbnail": "",
-    "bucket": "bank-ster-dev"
+    "bucket": "mariox-s3"
 }
 ```
 

@@ -306,4 +306,82 @@ public class MessageModal {
     public void setFileSize(long fileSize) {
         this.fileSize = fileSize;
     }
+
+    // ---- Media S3 + encryption metadata (v8) ----
+    // Populated by populateMediaFieldsFromCursor() so the adapter / receiver
+    // auto-fetch / download trigger can read everything from the model
+    // without going back to JSON parsing.
+
+    private String  s3Key                   =   "";
+    private String  s3Bucket                =   "";
+    private String  fileTransferId          =   "";
+    private String  remoteThumbnailUrl      =   "";
+    private String  encryptedS3Url          =   "";
+    private String  encryptionKey           =   "";
+    private String  encryptionIv            =   "";
+    private String  roomId                  =   "";
+
+    public String getRoomId() {
+        return roomId != null ? roomId : "";
+    }
+
+    public void setRoomId(String roomId) {
+        this.roomId = roomId != null ? roomId : "";
+    }
+
+    public String getS3Key() {
+        return s3Key != null ? s3Key : "";
+    }
+
+    public void setS3Key(String s3Key) {
+        this.s3Key = s3Key != null ? s3Key : "";
+    }
+
+    public String getS3Bucket() {
+        return s3Bucket != null ? s3Bucket : "";
+    }
+
+    public void setS3Bucket(String s3Bucket) {
+        this.s3Bucket = s3Bucket != null ? s3Bucket : "";
+    }
+
+    public String getFileTransferId() {
+        return fileTransferId != null ? fileTransferId : "";
+    }
+
+    public void setFileTransferId(String fileTransferId) {
+        this.fileTransferId = fileTransferId != null ? fileTransferId : "";
+    }
+
+    public String getRemoteThumbnailUrl() {
+        return remoteThumbnailUrl != null ? remoteThumbnailUrl : "";
+    }
+
+    public void setRemoteThumbnailUrl(String remoteThumbnailUrl) {
+        this.remoteThumbnailUrl = remoteThumbnailUrl != null ? remoteThumbnailUrl : "";
+    }
+
+    public String getEncryptedS3Url() {
+        return encryptedS3Url != null ? encryptedS3Url : "";
+    }
+
+    public void setEncryptedS3Url(String encryptedS3Url) {
+        this.encryptedS3Url = encryptedS3Url != null ? encryptedS3Url : "";
+    }
+
+    public String getEncryptionKey() {
+        return encryptionKey != null ? encryptionKey : "";
+    }
+
+    public void setEncryptionKey(String encryptionKey) {
+        this.encryptionKey = encryptionKey != null ? encryptionKey : "";
+    }
+
+    public String getEncryptionIv() {
+        return encryptionIv != null ? encryptionIv : "";
+    }
+
+    public void setEncryptionIv(String encryptionIv) {
+        this.encryptionIv = encryptionIv != null ? encryptionIv : "";
+    }
 }
