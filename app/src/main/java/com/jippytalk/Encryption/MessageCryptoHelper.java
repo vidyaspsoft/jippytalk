@@ -5,13 +5,17 @@ package com.jippytalk.Encryption;
  * Created on: 12-04-2026
  */
 
+import android.os.Build;
 import android.util.Base64;
 import android.util.Log;
+
+import androidx.annotation.RequiresApi;
 
 import com.jippytalk.Extras;
 
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 
 import javax.crypto.Cipher;
@@ -177,6 +181,7 @@ public class MessageCryptoHelper {
      * @param b64Iv  Base64 12-byte IV
      * @throws Exception on I/O or crypto failure
      */
+    @RequiresApi(api = Build.VERSION_CODES.TIRAMISU)
     public static void encryptStream(InputStream in, OutputStream out,
                                      String b64Key, String b64Iv) throws Exception {
         byte[]              keyBytes    =   Base64.decode(b64Key, Base64.NO_WRAP);
@@ -186,7 +191,9 @@ public class MessageCryptoHelper {
 
         Cipher              cipher      =   Cipher.getInstance(TRANSFORMATION);
         cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec);
-
+       // Log.e("Checking", "InputStream :" + in + "\nOutputStream: " + out+ " \nb64Key: "+b64Key+"\nb64Iv: "+b64Iv);
+        String is= new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        Log.e("Checking", "InputStream :" + is + "\nOutputStream: " + out+ " \nb64Key: "+b64Key+"\nb64Iv: "+b64Iv);
         CipherOutputStream cos = new CipherOutputStream(out, cipher);
         try {
             byte[] buf = new byte[8192];
@@ -194,6 +201,8 @@ public class MessageCryptoHelper {
             while ((n = in.read(buf)) != -1) {
                 cos.write(buf, 0, n);
             }
+            String is1= new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            Log.e("Checking 2", "InputStream :" + is1 + "\nOutputStream: " + out+ " \nb64Key: "+b64Key+"\nb64Iv: "+b64Iv);
             cos.flush();
         } finally {
             try { cos.close(); } catch (Exception ignored) {}
@@ -232,6 +241,106 @@ public class MessageCryptoHelper {
             out.flush();
         } finally {
             try { cis.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    // -------------------- Filename Encryption (for S3 object keys) --------
+
+    /**
+     * Encrypts a filename with the per-message AES-256 key for use as an S3
+     * object name, so neither the plaintext filename nor its extension ever
+     * appears in the S3 console or object listing.
+     *
+     * Output layout:  base64url( IV || ciphertext || authTag )
+     *   - A fresh 12-byte random IV is generated per call and embedded at
+     *     the front of the blob. The content IV ({@code b64Iv}) is NEVER
+     *     reused here — AES-GCM is insecure under nonce reuse across
+     *     different plaintexts with the same key.
+     *   - No extension is appended. Every uploaded object looks identical
+     *     on S3 (opaque ciphertext), so file type cannot be inferred from
+     *     the key. Any MIME-aware backend handling has to rely on the
+     *     Content-Type header or on data stored separately; the S3 PUT
+     *     already uses {@code application/octet-stream} for encrypted
+     *     payloads, so this does not regress anything.
+     *
+     * Receiver does NOT need to call {@link #decryptFilenameFromS3Name} —
+     * the original filename (with extension) travels Signal-encrypted
+     * inside the WebSocket metadata and is read from there. This method
+     * exists purely to keep the plaintext off the server/S3 side; the
+     * decrypt counterpart is provided for symmetry and future use.
+     *
+     * @param fileName original filename — may include extension, which
+     *                 becomes part of the ciphertext, NOT appended to the
+     *                 output
+     * @param b64Key   Base64 AES-256 key (the message's encryption_key)
+     * @return encrypted S3 object name (no extension), or {@code null} if
+     *         encryption fails
+     */
+    public static String encryptFilenameForS3(String fileName, String b64Key) {
+        if (b64Key == null || b64Key.isEmpty()) {
+            Log.e(Extras.LOG_MESSAGE, "encryptFilenameForS3: missing key");
+            return null;
+        }
+        if (fileName == null) fileName = "";
+        try {
+            byte[]              keyBytes    =   Base64.decode(b64Key, Base64.NO_WRAP);
+            SecretKeySpec       keySpec     =   new SecretKeySpec(keyBytes, ALGORITHM);
+
+            byte[]              iv          =   new byte[IV_SIZE_BYTES];
+            new SecureRandom().nextBytes(iv);
+
+            Cipher              cipher      =   Cipher.getInstance(TRANSFORMATION);
+            cipher.init(Cipher.ENCRYPT_MODE, keySpec, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            byte[]              ct          =   cipher.doFinal(fileName.getBytes("UTF-8"));
+
+            byte[]              blob        =   new byte[iv.length + ct.length];
+            System.arraycopy(iv, 0, blob, 0, iv.length);
+            System.arraycopy(ct, 0, blob, iv.length, ct.length);
+
+            return Base64.encodeToString(blob,
+                    Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "encryptFilenameForS3 failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Inverse of {@link #encryptFilenameForS3} — recovers the original
+     * filename from an encrypted S3 object name, given the per-message AES
+     * key. The name is assumed to have no extension (matching the output
+     * of the encrypt method). Returns {@code null} on any failure (bad
+     * base64, short blob, auth tag mismatch, etc.) — callers should fall
+     * back to the plaintext filename from the WebSocket metadata.
+     *
+     * @param s3Name the encrypted S3 object name
+     * @param b64Key Base64 AES-256 key (the message's encryption_key)
+     * @return the decrypted original filename, or {@code null} on failure
+     */
+    public static String decryptFilenameFromS3Name(String s3Name, String b64Key) {
+        if (s3Name == null || s3Name.isEmpty() || b64Key == null || b64Key.isEmpty()) {
+            return null;
+        }
+        try {
+            byte[] blob = Base64.decode(s3Name, Base64.URL_SAFE | Base64.NO_WRAP);
+            if (blob.length <= IV_SIZE_BYTES) return null;
+
+            byte[] iv = new byte[IV_SIZE_BYTES];
+            byte[] ct = new byte[blob.length - IV_SIZE_BYTES];
+            System.arraycopy(blob, 0, iv, 0, IV_SIZE_BYTES);
+            System.arraycopy(blob, IV_SIZE_BYTES, ct, 0, ct.length);
+
+            byte[]              keyBytes    =   Base64.decode(b64Key, Base64.NO_WRAP);
+            SecretKeySpec       keySpec     =   new SecretKeySpec(keyBytes, ALGORITHM);
+            Cipher              cipher      =   Cipher.getInstance(TRANSFORMATION);
+            cipher.init(Cipher.DECRYPT_MODE, keySpec, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            byte[]              pt          =   cipher.doFinal(ct);
+
+            return new String(pt, "UTF-8");
+        } catch (Exception e) {
+            Log.e(Extras.LOG_MESSAGE, "decryptFilenameFromS3Name failed: " + e.getMessage());
+            return null;
         }
     }
 

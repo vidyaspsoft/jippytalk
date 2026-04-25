@@ -273,27 +273,27 @@ public class AttachmentPickerHandler {
     }
 
     private void openCamera() {
-        Intent  intent  =   new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        cameraLauncher.launch(intent);
+       /* Intent  intent  =   new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        cameraLauncher.launch(intent);*/
     }
 
     private void openImageGallery() {
-        Intent  intent  =   new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+    /*    Intent  intent  =   new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
         intent.setType("image/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        galleryImageLauncher.launch(intent);
+        galleryImageLauncher.launch(intent);*/
     }
 
     private void openVideoCamera() {
-        Intent  intent  =   new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
-        videoCameraLauncher.launch(intent);
+      /*  Intent  intent  =   new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
+        videoCameraLauncher.launch(intent);*/
     }
 
     private void openVideoGallery() {
-        Intent  intent  =   new Intent(Intent.ACTION_PICK, MediaStore.Video.Media.EXTERNAL_CONTENT_URI);
+      /*  Intent  intent  =   new Intent(Intent.ACTION_PICK, MediaStore.Video.Media.EXTERNAL_CONTENT_URI);
         intent.setType("video/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        videoGalleryLauncher.launch(intent);
+        videoGalleryLauncher.launch(intent);*/
     }
 
     /**
@@ -348,15 +348,15 @@ public class AttachmentPickerHandler {
     }
 
     private void openContactPicker() {
-        Intent  intent  =   new Intent(Intent.ACTION_PICK, ContactsContract.Contacts.CONTENT_URI);
-        contactPickerLauncher.launch(intent);
+      /*  Intent  intent  =   new Intent(Intent.ACTION_PICK, ContactsContract.Contacts.CONTENT_URI);
+        contactPickerLauncher.launch(intent);*/
     }
 
     private void openAudioPicker() {
-        Intent  intent  =   new Intent(Intent.ACTION_PICK, MediaStore.Audio.Media.EXTERNAL_CONTENT_URI);
+       /* Intent  intent  =   new Intent(Intent.ACTION_PICK, MediaStore.Audio.Media.EXTERNAL_CONTENT_URI);
         intent.setType("audio/*");
         intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        audioLauncher.launch(intent);
+        audioLauncher.launch(intent);*/
     }
 
     // -------------------- Preview Launch Helpers Starts Here ---------------------

@@ -685,9 +685,34 @@ public class WebSocketConnection {
             // ciphertext = encrypted caption only (not metadata).
             String  fileTransferId  =   payload.optString("file_transfer_id", "");
             String  s3Key           =   payload.optString("s3_key", "");
-            String  fileName        =   payload.optString("file_name", "");
+            String  rawFileName     =   payload.optString("file_name", "");
+            // file_name is now AES-GCM ciphertext (base64url of IV || ct) of
+            // the original name, using this message's per-message key.
+            // Attempt decryption with the key; on failure, fall back to the
+            // raw value so legacy plaintext messages still render.
+            String  fileName;
+            if (!rawFileName.isEmpty() && !encryptionKey.isEmpty()) {
+                String decName = com.jippytalk.Encryption.MessageCryptoHelper
+                        .decryptFilenameFromS3Name(rawFileName, encryptionKey);
+                fileName = (decName != null && !decName.isEmpty()) ? decName : rawFileName;
+            } else {
+                fileName = rawFileName;
+            }
             String  contentType     =   payload.optString("content_type", "");
             String  contentSubtype  =   payload.optString("content_subtype", "");
+            // bucket is AES-GCM ciphertext (base64url IV || ct) — decrypt
+            // with the per-message key before handing to DB. Falls back to
+            // the raw value if decryption fails, so legacy plaintext rows
+            // still work.
+            String  rawBucket       =   payload.optString("bucket", "");
+            String  bucket;
+            if (!rawBucket.isEmpty() && !encryptionKey.isEmpty()) {
+                String decBucket = com.jippytalk.Encryption.MessageCryptoHelper
+                        .decryptFilenameFromS3Name(rawBucket, encryptionKey);
+                bucket = (decBucket != null && !decBucket.isEmpty()) ? decBucket : rawBucket;
+            } else {
+                bucket = rawBucket;
+            }
 
             Log.e(Extras.LOG_SOCKET_RECV, "[INCOMING] from=" + senderId
                     + " id=" + messageId + " clientId=" + clientMsgId
@@ -771,7 +796,7 @@ public class WebSocketConnection {
                         payload.optLong("duration", 0),
                         payload.optLong("file_size", 0),
                         s3Key,
-                        payload.optString("bucket", ""),
+                        bucket,
                         fileTransferId,
                         "",                             // local_file_path (filled after download)
                         "",                             // local_thumbnail_path (filled after auto-fetch)
@@ -1249,13 +1274,38 @@ public class WebSocketConnection {
                 b64Iv   =   keyPair != null ? keyPair.iv : "";
             }
 
-            // Encrypt caption, file URL, thumbnail URL with same key+iv
+            // Encrypt caption, file URL, thumbnail URL, AND filename with the
+            // same per-message key. The filename uses the dedicated helper
+            // ({@code encryptFilenameForS3}) which generates a fresh IV and
+            // embeds it in the output — reusing the content IV would break
+            // AES-GCM (nonce reuse across different plaintexts).
             String encCaption   =   !captionText.isEmpty()
                     ? encryptWithKeyIv(captionText, b64Key, b64Iv) : "";
             String encFileUrl   =   !fileUrl.isEmpty()
                     ? encryptWithKeyIv(fileUrl, b64Key, b64Iv) : "";
             String encThumbUrl  =   !thumbUrl.isEmpty()
                     ? encryptWithKeyIv(thumbUrl, b64Key, b64Iv) : "";
+            String encFileName  =   (fileName != null && !fileName.isEmpty()
+                                     && b64Key != null && !b64Key.isEmpty())
+                    ? com.jippytalk.Encryption.MessageCryptoHelper
+                        .encryptFilenameForS3(fileName, b64Key)
+                    : null;
+            // bucket + region use the same helper (generic short-string
+            // AES-GCM with fresh IV embedded). NOT encryptWithKeyIv —
+            // reusing the content IV across many short fields is insecure
+            // under AES-GCM, and region is a highly predictable plaintext
+            // (short list of AWS regions), which would weaken the other
+            // fields via cross-field XOR attacks. Each field here gets its
+            // own fresh IV.
+            String encBucket    =   (bucketName != null && !bucketName.isEmpty()
+                                     && b64Key != null && !b64Key.isEmpty())
+                    ? com.jippytalk.Encryption.MessageCryptoHelper
+                        .encryptFilenameForS3(bucketName, b64Key)
+                    : null;
+            String encRegion    =   (b64Key != null && !b64Key.isEmpty())
+                    ? com.jippytalk.Encryption.MessageCryptoHelper
+                        .encryptFilenameForS3(API.S3_REGION, b64Key)
+                    : null;
 
             payload.put("encryption_key", b64Key);
             payload.put("encryption_iv", b64Iv);
@@ -1265,18 +1315,30 @@ public class WebSocketConnection {
             payload.put("encrypted_s3_url", encFileUrl);
             payload.put("thumbnail", encThumbUrl);
 
-            // Plaintext fields (backend needs for routing/indexing)
+            // file_name is now the AES-GCM ciphertext of the original name
+            // (same string we could use as the S3 object key, self-contained
+            // with its IV). Receiver decrypts via
+            // MessageCryptoHelper.decryptFilenameFromS3Name. Legacy fallback
+            // sends plaintext only when encryption is unavailable for this
+            // message (no per-message key).
+            payload.put("file_name",
+                    encFileName != null ? encFileName
+                            : (fileName != null ? fileName : ""));
             payload.put("s3_key", s3Key != null ? s3Key : "");
-            payload.put("file_name", fileName != null ? fileName : "");
             payload.put("file_size", fileSize);
             payload.put("content_type", contentType != null ? contentType : "");
             payload.put("content_subtype", contentSubtype != null ? contentSubtype : "");
-            payload.put("caption", captionText);
+            // caption is already encrypted into `ciphertext` above — do NOT
+            // duplicate it in plaintext here.
             payload.put("width", width);
             payload.put("height", height);
             payload.put("duration", duration);
-            payload.put("bucket", bucketName);
-            payload.put("region", API.S3_REGION);
+            // bucket + region encrypted above. Fallback to plaintext only
+            // when no per-message key is available (legacy path).
+            payload.put("bucket",
+                    encBucket != null ? encBucket : (bucketName != null ? bucketName : ""));
+            payload.put("region",
+                    encRegion != null ? encRegion : API.S3_REGION);
 
             JSONObject  envelope    =   new JSONObject();
             envelope.put("type", "file");

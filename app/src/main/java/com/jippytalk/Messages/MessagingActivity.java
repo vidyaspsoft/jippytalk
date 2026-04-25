@@ -2912,8 +2912,25 @@ public class MessagingActivity extends OnlineOfflineDetectorActivity implements
         try {
             String jwtToken = sharedPreferences.getString(
                     com.jippytalk.Managers.SharedPreferenceDetails.JWT_TOKEN, "");
-            String thumbName = "thumb_" + System.currentTimeMillis()
-                    + "_" + (originalName != null ? originalName : "file") + ".png";
+            // Thumbnail S3 object name is AES-256-GCM encrypted with this
+            // message's per-message key, so neither the original filename
+            // nor the file type appears in the S3 console. Fresh IV per
+            // call is embedded in the encoded name (content IV cannot be
+            // reused — GCM is insecure under nonce reuse). No extension is
+            // appended; the S3 PUT already uses application/octet-stream
+            // for encrypted payloads, and the receiver reads the real
+            // filename from the Signal-encrypted WebSocket metadata.
+            // Legacy fallback keeps uploads working when no per-message
+            // key is available.
+            String thumbEncName = (b64Key != null && !b64Key.isEmpty())
+                    ? com.jippytalk.Encryption.MessageCryptoHelper
+                        .encryptFilenameForS3(originalName != null ? originalName : "file",
+                                              b64Key)
+                    : null;
+            String thumbName = (thumbEncName != null)
+                    ? thumbEncName
+                    : ("thumb_" + System.currentTimeMillis() + "_"
+                            + (originalName != null ? originalName : "file") + ".png");
 
             // Encrypt thumbnail bytes to a temp cache file if encryption keys
             // are present. Sender's local plaintext thumbnail is preserved.

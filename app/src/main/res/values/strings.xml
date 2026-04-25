@@ -13,6 +13,8 @@
     <string name="login_network_error">Network error. Please try again.</string>
     <string name="username_required">Username is required</string>
     <string name="password_required">Password is required</string>
+    <string name="hint_select_user">Select user</string>
+    <string name="user_required">Please select a user</string>
 
     <!-- Attachment Bottom Sheet strings -->
     <string name="attachment">Attachment</string>

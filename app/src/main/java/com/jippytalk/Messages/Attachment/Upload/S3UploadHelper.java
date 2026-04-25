@@ -196,36 +196,52 @@ public class S3UploadHelper {
                         postFailure(task, "Unable to open plaintext file for encryption");
                         return;
                     }
+                  //  Log.e("Checking", "PIN :" + pin + "fout: " + fout + " b64Key: "+b64Key+"b64Iv: "+b64Iv);
                     com.jippytalk.Encryption.MessageCryptoHelper.encryptStream(
                             pin, fout, b64Key, b64Iv);
+                  //  Log.e("Checking", "PIN :" + pin + "fout: " + fout + " b64Key: "+b64Key+"b64Iv: "+b64Iv);
                 }
                 uploadUri  = Uri.fromFile(encryptedTempFile);
                 uploadSize = encryptedTempFile.length();
-                Log.e(Extras.LOG_MESSAGE, "Encrypted file for upload: " + fileName
-                        + " plaintext=" + fileSize + " ciphertext=" + uploadSize);
+              //  Log.e(Extras.LOG_MESSAGE, "Encrypted file for upload: " + fileName + " plaintext=" + fileSize + " ciphertext=" + uploadSize);
+
             } else {
                 uploadUri  = fileUri;
                 uploadSize = fileSize;
             }
 
-            Log.e(Extras.LOG_MESSAGE, "Starting upload for " + fileName + " (" + uploadSize + " bytes)");
+            Log.e(Extras.LOG_MESSAGE, "Starting upload for " + fileName + " (" + uploadSize + " bytes)+");
 
             // Step 2: Request presigned URL using the on-the-wire size.
             //
-            // Prefix the server-side object name with the current epoch-ms so
-            // every upload lands at a unique S3 key — even when the same
-            // local file is sent twice in a row. Without this the backend
-            // derives the key from the raw file name ("50mb.pdf") and S3
-            // overwrites the first object with the second; once the first
-            // recipient downloads and the backend deletes the object, the
-            // second recipient gets a 404 because the single shared object
-            // is already gone.
+            // The name sent to the backend (and therefore visible in the S3
+            // console / object key) is AES-256-GCM encrypted with this
+            // message's per-message key — layout: base64url(IV || ct). No
+            // extension is appended, so the S3 object key leaks neither
+            // the original filename nor the file type. The content IV
+            // ({@code b64Iv}) is NOT reused (GCM is insecure under nonce
+            // reuse); the helper generates a fresh 12-byte IV per call and
+            // embeds it inside the encoded name.
             //
-            // Format: "<epochMs>_<originalName>". The ".<ext>" is preserved
-            // so backend MIME routing + the receiver's filename display work
-            // unchanged.
-            String              uploadFileName  =   System.currentTimeMillis() + "_"
-                                                    + (fileName != null ? fileName : "file");
+            // Receiver recovers the filename (with extension) from the
+            // Signal-encrypted WebSocket metadata (unchanged path), so no
+            // decrypt step is required on download.
+            //
+            // If the message has no per-message key (legacy/plaintext mode),
+            // fall back to the original epochMs-prefixed name so uniqueness
+            // is preserved — S3 overwrites would cause 404s on a second
+            // recipient after the first one's post-download delete.
+            String              uploadFileName;
+            String              encryptedName   =   (b64Key != null && !b64Key.isEmpty())
+                                                    ? com.jippytalk.Encryption.MessageCryptoHelper
+                                                        .encryptFilenameForS3(fileName, b64Key)
+                                                    : null;
+            if (encryptedName != null) {
+                uploadFileName  =   encryptedName;
+            } else {
+                uploadFileName  =   System.currentTimeMillis() + "_"
+                                    + (fileName != null ? fileName : "file");
+            }
             String              jwtToken        =   sharedPreferences.getString(SharedPreferenceDetails.JWT_TOKEN, "");
             PresignResponse     presignResponse =   requestPresignedUrl(uploadFileName, uploadSize, jwtToken);
 

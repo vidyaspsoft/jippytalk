@@ -10,6 +10,8 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.widget.ArrayAdapter;
+import android.widget.AutoCompleteTextView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
@@ -17,7 +19,6 @@ import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.material.button.MaterialButton;
-import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
 import com.jippytalk.API;
 import com.jippytalk.Chats.MainActivity;
@@ -43,7 +44,9 @@ import java.util.concurrent.Executors;
 
 /**
  * SendOtpActivity - Login screen for the application.
- * Allows the user to enter their username and password to authenticate.
+ * Dev-mode picker: the user selects one of a fixed list of test accounts
+ * from a dropdown, and the app authenticates with a shared hard-coded
+ * password. No free-form credential input.
  *
  * On successful login:
  * - Saves userId and JWT token to SharedPreferences
@@ -55,10 +58,8 @@ public class SendOtpActivity extends AppCompatActivity {
 
     // ---- Views ----
 
-    private TextInputLayout             tilUsername;
-    private TextInputLayout             tilPassword;
-    private TextInputEditText           etUsername;
-    private TextInputEditText           etPassword;
+    private TextInputLayout             tilUser;
+    private AutoCompleteTextView        dropdownUser;
     private MaterialButton              btnLogin;
     private ProgressBar                 progressBar;
     private TextView                    tvError;
@@ -66,6 +67,14 @@ public class SendOtpActivity extends AppCompatActivity {
     // ---- Fields ----
 
     private final ExecutorService       executorService     =   Executors.newSingleThreadExecutor();
+
+    // Hard-coded test users — same password for all. The login screen is
+    // a dev-mode picker right now, not a real credential form.
+    private static final String[]       TEST_USERS          =   {
+            "alice", "bob", "charlie", "diana", "eve",
+            "frank", "grace", "heidi", "ivan", "judy"
+    };
+    private static final String         FIXED_PASSWORD      =   "password123";
 
     // ---- Lifecycle ----
 
@@ -81,16 +90,23 @@ public class SendOtpActivity extends AppCompatActivity {
     // -------------------- View Initialization Starts Here ---------------------
 
     /**
-     * Initializes all view references from the layout.
+     * Initializes all view references from the layout and wires up the
+     * user dropdown with the hard-coded test users.
      */
     private void initViews() {
-        tilUsername      =   findViewById(R.id.tilUsername);
-        tilPassword      =   findViewById(R.id.tilPassword);
-        etUsername       =   findViewById(R.id.etUsername);
-        etPassword       =   findViewById(R.id.etPassword);
+        tilUser          =   findViewById(R.id.tilUser);
+        dropdownUser     =   findViewById(R.id.dropdownUser);
         btnLogin         =   findViewById(R.id.btnLogin);
         progressBar      =   findViewById(R.id.progressBar);
         tvError          =   findViewById(R.id.tvError);
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_list_item_1, TEST_USERS);
+        dropdownUser.setAdapter(adapter);
+        dropdownUser.setOnItemClickListener((parent, view, position, id) -> {
+            tilUser.setError(null);
+            tvError.setVisibility(View.GONE);
+        });
     }
 
     // -------------------- Listener Setup Starts Here ---------------------
@@ -105,29 +121,24 @@ public class SendOtpActivity extends AppCompatActivity {
     // -------------------- Login Logic Starts Here ---------------------
 
     /**
-     * Validates input fields and initiates the login API call.
-     * Shows appropriate error messages for empty fields.
+     * Validates the dropdown selection and initiates the login API call.
+     * Password is fixed — every test user authenticates with the same one.
      */
     private void attemptLogin() {
-        tilUsername.setError(null);
-        tilPassword.setError(null);
+        tilUser.setError(null);
         tvError.setVisibility(View.GONE);
 
-        String  username    =   etUsername.getText() != null ? etUsername.getText().toString().trim() : "";
-        String  password    =   etPassword.getText() != null ? etPassword.getText().toString().trim() : "";
+        String  username    =   dropdownUser.getText() != null
+                                ? dropdownUser.getText().toString().trim()
+                                : "";
 
         if (username.isEmpty()) {
-            tilUsername.setError(getString(R.string.username_required));
-            return;
-        }
-
-        if (password.isEmpty()) {
-            tilPassword.setError(getString(R.string.password_required));
+            tilUser.setError(getString(R.string.user_required));
             return;
         }
 
         showLoading(true);
-        callLoginAPI(username, password);
+        callLoginAPI(username, FIXED_PASSWORD);
     }
 
     /**
@@ -364,14 +375,12 @@ public class SendOtpActivity extends AppCompatActivity {
         if (isLoading) {
             progressBar.setVisibility(View.VISIBLE);
             btnLogin.setVisibility(View.INVISIBLE);
-            etUsername.setEnabled(false);
-            etPassword.setEnabled(false);
+            dropdownUser.setEnabled(false);
         }
         else {
             progressBar.setVisibility(View.GONE);
             btnLogin.setVisibility(View.VISIBLE);
-            etUsername.setEnabled(true);
-            etPassword.setEnabled(true);
+            dropdownUser.setEnabled(true);
         }
     }
 

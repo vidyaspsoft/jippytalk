@@ -24,6 +24,14 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+
+    // Ship English-only resources. Adding more languages later is just a
+    // matter of appending them here ("hi", "es", ...). Drops a couple of MB
+    // of bundled translations from AppCompat / Material / etc. (AGP 9+ moved
+    // this from defaultConfig.resourceConfigurations to androidResources.)
+    androidResources {
+        localeFilters += listOf("en")
+    }
     dataBinding{
         enable=true
     }
@@ -35,10 +43,48 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 strips unused classes / methods / fields from the app and
+            // every library. Combined with isShrinkResources this typically
+            // halves APK size for an app with libsignal + Firebase + Maps.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            // Sign release builds with the debug key so the test APK
+            // installs on the client's phone without needing a release
+            // keystore. Replace with a real signingConfigs.release before
+            // shipping to the Play Store.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
+            )
+        }
+        debug {
+            // Keep debug builds fast — no shrinking.
+            isMinifyEnabled = false
+        }
+    }
+
+    // Per-ABI APK splits. Produces a separate, smaller APK per architecture
+    // (arm64-v8a-release.apk + armeabi-v7a-release.apk). Hand the arm64-v8a
+    // file to the client — it works on essentially every modern phone.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
+    }
+
+    // Drop META-INF noise that some libraries duplicate across JARs and
+    // that bloats the APK without serving the runtime.
+    packaging {
+        resources {
+            excludes += listOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE*",
+                "META-INF/NOTICE*",
+                "META-INF/*.kotlin_module"
             )
         }
     }

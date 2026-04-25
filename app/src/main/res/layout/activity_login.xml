@@ -33,45 +33,22 @@
         app:layout_constraintEnd_toEndOf="parent" />
 
     <com.google.android.material.textfield.TextInputLayout
-        android:id="@+id/tilUsername"
-        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+        android:id="@+id/tilUser"
+        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="48dp"
-        android:hint="@string/hint_username"
+        android:hint="@string/hint_select_user"
         app:layout_constraintTop_toBottomOf="@id/tvLoginSubtitle"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/etUsername"
+        <AutoCompleteTextView
+            android:id="@+id/dropdownUser"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:inputType="text"
-            android:maxLines="1"
-            android:imeOptions="actionNext" />
-
-    </com.google.android.material.textfield.TextInputLayout>
-
-    <com.google.android.material.textfield.TextInputLayout
-        android:id="@+id/tilPassword"
-        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:hint="@string/hint_password"
-        app:endIconMode="password_toggle"
-        app:layout_constraintTop_toBottomOf="@id/tilUsername"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/etPassword"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:inputType="textPassword"
-            android:maxLines="1"
-            android:imeOptions="actionDone" />
+            android:inputType="none"
+            android:maxLines="1" />
 
     </com.google.android.material.textfield.TextInputLayout>
 
@@ -83,7 +60,7 @@
         android:textColor="#D32F2F"
         android:textSize="14sp"
         android:visibility="gone"
-        app:layout_constraintTop_toBottomOf="@id/tilPassword"
+        app:layout_constraintTop_toBottomOf="@id/tilUser"
         app:layout_constraintStart_toStartOf="parent" />
 
     <com.google.android.material.button.MaterialButton

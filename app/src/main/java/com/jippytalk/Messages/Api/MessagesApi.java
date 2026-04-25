@@ -296,7 +296,19 @@ public class MessagesApi {
                     msg.readAt              =   obj.optString("read_at", "");
                     msg.createdAt           =   obj.optString("created_at", "");
                     // File fields (only present for message_type=file)
-                    msg.fileName            =   obj.optString("file_name", "");
+                    // file_name is AES-GCM ciphertext (base64url IV || ct) of
+                    // the original name, using this message's encryption_key.
+                    // Decrypt here so downstream consumers see plaintext.
+                    // Falls back to raw value if decryption fails (legacy).
+                    String rawName          =   obj.optString("file_name", "");
+                    if (!rawName.isEmpty() && msg.encryptionKey != null
+                            && !msg.encryptionKey.isEmpty()) {
+                        String dec = com.jippytalk.Encryption.MessageCryptoHelper
+                                .decryptFilenameFromS3Name(rawName, msg.encryptionKey);
+                        msg.fileName        =   (dec != null && !dec.isEmpty()) ? dec : rawName;
+                    } else {
+                        msg.fileName        =   rawName;
+                    }
                     msg.s3Key               =   obj.optString("s3_key", "");
                     msg.contentType         =   obj.optString("content_type", "");
                     msg.contentSubtype      =   obj.optString("content_subtype", "");
